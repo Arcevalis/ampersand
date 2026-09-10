@@ -12,6 +12,7 @@ using Avalonia.Data;
 using Avalonia.Input;
 using Avalonia.Layout;
 using Avalonia.Media;
+using Avalonia.Platform.Storage;
 using Avalonia.Styling;
 using Avalonia.VisualTree;
 
@@ -29,6 +30,9 @@ internal sealed class MainWindow : Window
 	private readonly Button logFolderButton;
 	private readonly TextBox sboxPathBox;
 	private readonly Button browsePathButton;
+	private readonly TextBox sboxServerGameBox;
+	private readonly Button browseServerGameButton;
+	private readonly Border sboxServerGamePanel;
 	private readonly CheckBox steamRuntime;
 	private readonly CheckBox systemTerminal;
 
@@ -40,6 +44,7 @@ internal sealed class MainWindow : Window
 	public MainWindow()
 	{
 		Title = "Ampersand";
+		Icon = AppIcon.Icon;
 		Width = 1040;
 		Height = 660;
 		RequestedThemeVariant = ThemeVariant.Dark;
@@ -225,12 +230,59 @@ internal sealed class MainWindow : Window
 		var targetPanel = Surface( targetList, TerminalTheme.TargetPanel, new Thickness( 0, 0, 0, 1 ) );
 		var barPanel = Surface( bar, TerminalTheme.ToolbarPanel, new Thickness( 0 ) );
 
-		var right = new Grid { RowDefinitions = new RowDefinitions( "Auto,*,Auto" ) };
+		// Dedicated server game field — only visible when sbox-server is selected.
+		// Accepts either a package ident (fss.bloodsigil) or an absolute path to a .sbproj.
+		sboxServerGameBox = new TextBox
+		{
+			FontSize = 11,
+			PlaceholderText = "Game ident (fss.bloodsigil) or path to .sbproj",
+			Margin = new Thickness( 10, 6, 0, 6 )
+		};
+		sboxServerGameBox.KeyDown += ( _, e ) =>
+		{
+			if ( e.Key == Avalonia.Input.Key.Enter )
+				_ = CommitSboxServerGameAsync();
+		};
+		sboxServerGameBox.LostFocus += async ( _, _ ) => await CommitSboxServerGameAsync();
+
+		browseServerGameButton = new Button
+		{
+			Content = "…",
+			Width = 30,
+			Height = 26,
+			Padding = new Thickness( 0 ),
+			Margin = new Thickness( 6, 6, 10, 6 ),
+			CornerRadius = new CornerRadius( 4 ),
+			VerticalAlignment = VerticalAlignment.Top,
+			HorizontalContentAlignment = HorizontalAlignment.Center,
+			VerticalContentAlignment = VerticalAlignment.Center,
+			Cursor = new Cursor( StandardCursorType.Hand )
+		};
+		ToolTip.SetTip( browseServerGameButton, "Browse for a .sbproj file" );
+		browseServerGameButton.Styles.Add( PresenterFill( ":pointerover", TerminalTheme.SidebarHover ) );
+		browseServerGameButton.Styles.Add( PresenterFill( ":pressed", TerminalTheme.SidebarPressed ) );
+		browseServerGameButton.Click += async ( _, _ ) => await PickAndSaveServerGameAsync();
+
+		var sboxServerGameRow = new Grid { ColumnDefinitions = new ColumnDefinitions( "*,Auto" ) };
+		sboxServerGameRow.Children.Add( sboxServerGameBox );
+		Grid.SetColumn( browseServerGameButton, 1 );
+		sboxServerGameRow.Children.Add( browseServerGameButton );
+
+		var sboxServerGameContent = new StackPanel();
+		sboxServerGameContent.Children.Add( SidebarHeader( "DEDICATED SERVER GAME" ) );
+		sboxServerGameContent.Children.Add( sboxServerGameRow );
+
+		sboxServerGamePanel = Surface( sboxServerGameContent, TerminalTheme.ToolbarPanel, new Thickness( 0, 1, 0, 0 ) );
+		sboxServerGamePanel.IsVisible = false;
+
+		var right = new Grid { RowDefinitions = new RowDefinitions( "Auto,*,Auto,Auto" ) };
 		right.Children.Add( SidebarHeader( "SHELL SCRIPTS" ) );
 		Grid.SetRow( targetPanel, 1 );
 		right.Children.Add( targetPanel );
 		Grid.SetRow( barPanel, 2 );
 		right.Children.Add( barPanel );
+		Grid.SetRow( sboxServerGamePanel, 3 );
+		right.Children.Add( sboxServerGamePanel );
 
 		depCheckButton = SidebarButton( "Check for missing dependencies" );
 		depCheckButton.Click += ( _, _ ) => RunDependencyCheck();
@@ -291,6 +343,7 @@ internal sealed class MainWindow : Window
 				resolvedRoot = stale; // keep stale for display, will still prompt
 		}
 		UpdateSboxPathDisplay();
+		UpdateSboxServerGameDisplay();
 
 		var sboxLocationPanel = new StackPanel();
 		sboxLocationPanel.Children.Add( SidebarHeader( "S&BOX LOCATION" ) );
@@ -394,6 +447,16 @@ internal sealed class MainWindow : Window
 
 		selected = target;
 		UpdateStatusBar();
+		UpdateServerGamePanelVisibility();
+	}
+
+	private void UpdateServerGamePanelVisibility()
+	{
+		if ( sboxServerGamePanel is null ) return;
+		var isServer = selected?.ScriptFile == "sbox-server.sh";
+		sboxServerGamePanel.IsVisible = isServer;
+		if ( isServer )
+			UpdateSboxServerGameDisplay();
 	}
 
 	private void UpdateToggles( LaunchTarget target )
@@ -465,6 +528,20 @@ internal sealed class MainWindow : Window
 
 		// Stale persisted path - keep for display but treat as invalid for launch.
 		return null;
+	}
+
+	private string? GetSboxServerGame()
+	{
+		// Prefer the live text box (may have unsaved edits) over the persisted value.
+		string? fromBox = null;
+		try { fromBox = sboxServerGameBox?.Text?.Trim(); } catch { }
+		if ( !string.IsNullOrWhiteSpace( fromBox ) )
+		{
+			var norm = SboxSettings.NormalizeServerGame( fromBox );
+			if ( !string.IsNullOrWhiteSpace( norm ) )
+				return norm;
+		}
+		return SboxSettings.GetSboxServerGame();
 	}
 
 	private async Task LaunchCore( LaunchTarget target )
@@ -546,6 +623,35 @@ internal sealed class MainWindow : Window
 		finally
 		{
 			target.Preparing = false;
+		}
+
+		// Append sbox-server game argument (ident or .sbproj path) when launching the
+		// dedicated server. The engine expects "+game <ident|/path/to.sbproj>" as
+		// concommand arguments (see engine/Sandbox.GameInstance/GameInstanceDll.cs:872,
+		// ViewportTools.SpawnDedicatedServer). We store only the ident/path and add
+		// the "+game" switch here. Both host and sniper wrapper paths forward "$@" to sbox-server.
+		if ( target.ScriptFile == "sbox-server.sh" )
+		{
+			var serverGame = GetSboxServerGame();
+			if ( !string.IsNullOrWhiteSpace( serverGame ) )
+			{
+				// Persist the box's live edit if it hasn't been committed yet (user hit
+				// play without blurring the field).
+				try
+				{
+					var boxText = sboxServerGameBox?.Text?.Trim();
+					if ( !string.IsNullOrWhiteSpace( boxText ) )
+					{
+						var normBox = SboxSettings.NormalizeServerGame( boxText );
+						if ( normBox == serverGame )
+							SboxSettings.SaveServerGame( serverGame );
+					}
+				}
+				catch { }
+
+				command.Add( "+game" );
+				command.Add( serverGame );
+			}
 		}
 
 		try
@@ -840,6 +946,7 @@ internal sealed class MainWindow : Window
 			statusText.Text = "idle - " + runner.Name;
 
 		UpdateToggles( selected );
+		UpdateServerGamePanelVisibility();
 	}
 
 	private void LoadMetadata()
@@ -889,6 +996,135 @@ internal sealed class MainWindow : Window
 		var display = SboxSettings.ShortenForDisplay( resolvedRoot, 42 );
 		sboxPathBox.Text = valid ? display : "⚠ stale: " + display;
 		ToolTip.SetTip( sboxPathBox, resolvedRoot + ( valid ? "" : "\n(stale — folder no longer contains game/ + engine/ + game/sbox)" ) + "\nStored in " + SboxSettings.ConfigPath );
+	}
+
+	private void UpdateSboxServerGameDisplay()
+	{
+		if ( sboxServerGameBox is null ) return;
+
+		var game = SboxSettings.GetSboxServerGame();
+		// Only overwrite if box isn't currently focused (don't clobber edit) and differs.
+		// For simplicity always sync when not focused; if focused, leave as-is until commit.
+		try
+		{
+			var focused = sboxServerGameBox.IsFocused;
+			if ( focused ) return;
+		}
+		catch { }
+
+		sboxServerGameBox.Text = game ?? "";
+		var tip = string.IsNullOrWhiteSpace( game )
+			? "Game for sbox-server: ident (fss.bloodsigil) or path to .sbproj.\nStored in " + SboxSettings.ConfigPath
+			: game + "\nStored in " + SboxSettings.ConfigPath;
+		ToolTip.SetTip( sboxServerGameBox, tip );
+	}
+
+	private async Task CommitSboxServerGameAsync()
+	{
+		if ( sboxServerGameBox is null ) return;
+
+		var raw = sboxServerGameBox.Text?.Trim();
+		if ( string.IsNullOrWhiteSpace( raw ) )
+		{
+			// Empty clears the persisted value.
+			try { SboxSettings.SaveServerGame( null ); } catch { }
+			sboxServerGameBox.Text = "";
+			ToolTip.SetTip( sboxServerGameBox, "Game for sbox-server: ident (fss.bloodsigil) or path to .sbproj.\nStored in " + SboxSettings.ConfigPath );
+			statusText.Text = "cleared dedicated server game";
+			return;
+		}
+
+		var normalized = SboxSettings.NormalizeServerGame( raw );
+		if ( normalized is null )
+		{
+			UpdateSboxServerGameDisplay();
+			return;
+		}
+
+		try
+		{
+			SboxSettings.SaveServerGame( normalized );
+		}
+		catch ( Exception e )
+		{
+			await ConfirmDialog.Notify( this, "Could not save settings", e.Message + "\n\nPath: " + SboxSettings.ConfigPath );
+			return;
+		}
+
+		sboxServerGameBox.Text = normalized;
+		ToolTip.SetTip( sboxServerGameBox, normalized + "\nStored in " + SboxSettings.ConfigPath );
+		statusText.Text = "dedicated server game: " + normalized;
+	}
+
+	private async Task PickAndSaveServerGameAsync()
+	{
+		try
+		{
+			var sp = StorageProvider;
+			if ( sp is not null )
+			{
+				var current = SboxSettings.GetSboxServerGame();
+				Uri? startUri = null;
+				if ( !string.IsNullOrWhiteSpace( current ) && ( current.Contains( '/' ) || current.Contains( '\\' ) ) )
+				{
+					try
+					{
+						var dir = Path.GetDirectoryName( current );
+						if ( dir is not null && Directory.Exists( dir ) )
+							startUri = new Uri( dir );
+						else if ( File.Exists( current ) )
+						{
+							var d = Path.GetDirectoryName( Path.GetFullPath( current ) );
+							if ( d is not null && Directory.Exists( d ) )
+								startUri = new Uri( d );
+						}
+					}
+					catch { }
+				}
+
+				// Fallback start: user's sboxprojects or home
+				if ( startUri is null )
+				{
+					try
+					{
+						var home = Environment.GetFolderPath( Environment.SpecialFolder.UserProfile );
+						var proj = Path.Combine( home, "sboxprojects" );
+						if ( Directory.Exists( proj ) )
+							startUri = new Uri( proj );
+						else if ( Directory.Exists( home ) )
+							startUri = new Uri( home );
+					}
+					catch { }
+				}
+
+				var files = await sp.OpenFilePickerAsync( new FilePickerOpenOptions
+				{
+					Title = "Select .sbproj or enter ident",
+					AllowMultiple = false,
+					SuggestedStartLocation = startUri is not null ? await sp.TryGetFolderFromPathAsync( startUri ) : null,
+					FileTypeFilter = new[]
+					{
+						new FilePickerFileType( "s&box Project (*.sbproj)" ) { Patterns = new[] { "*.sbproj" } },
+						new FilePickerFileType( "All files" ) { Patterns = new[] { "*" } }
+					}
+				} );
+
+				if ( files is { Count: > 0 } )
+				{
+					var picked = files[0].Path.LocalPath;
+					if ( !string.IsNullOrEmpty( picked ) )
+					{
+						sboxServerGameBox.Text = picked;
+						await CommitSboxServerGameAsync();
+						return;
+					}
+				}
+			}
+		}
+		catch { }
+
+		// If picker unavailable or cancelled, just focus the text box for manual entry.
+		try { sboxServerGameBox.Focus(); } catch { }
 	}
 
 	/// <summary>

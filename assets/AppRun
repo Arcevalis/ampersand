@@ -1,0 +1,20 @@
+#!/bin/sh
+# AppRun for the Ampersand AppImage.
+# Resolves its own mount point (AppImage mounts read-only under /tmp/.mount_*)
+# and execs the published .NET binary in usr/bin/.
+#
+# AppContext.BaseDirectory inside the app therefore points at
+# $HERE/usr/bin/, where build-appimage.sh places scripts/ alongside the
+# binary — so AppPaths.FindScriptsDir() needs no special-casing.
+#
+# For self-contained single-file publish, force bundle extraction into the
+# user's cache instead of the default temp extraction on every launch.
+HERE="$(dirname "$(readlink -f "$0")")"
+export PATH="${HERE}/usr/bin:${PATH}"
+
+if [ -z "${DOTNET_BUNDLE_EXTRACT_BASE_DIR:-}" ]; then
+	CACHE_HOME="${XDG_CACHE_HOME:-$HOME/.cache}"
+	export DOTNET_BUNDLE_EXTRACT_BASE_DIR="${CACHE_HOME}/ampersand-bundle"
+fi
+
+exec "${HERE}/usr/bin/ampersand" "$@"

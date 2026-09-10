@@ -48,6 +48,7 @@ internal static class ConfirmDialog
 		var dialog = new Window
 		{
 			Title = title,
+			Icon = AppIcon.Icon,
 			Width = 760,
 			Height = 520,
 			CanResize = true,
@@ -142,6 +143,7 @@ internal static class ConfirmDialog
 		var dialog = new Window
 		{
 			Title = title,
+			Icon = AppIcon.Icon,
 			Width = 460,
 			SizeToContent = SizeToContent.Height,
 			CanResize = false,

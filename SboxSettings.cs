@@ -4,7 +4,7 @@ using System.Text.Json;
 
 namespace Ampersand;
 
-internal sealed record SboxConfig( string SboxRoot );
+internal sealed record SboxConfig( string SboxRoot, string? SboxServerGame = null );
 
 internal static class SboxSettings
 {
@@ -110,27 +110,145 @@ internal static class SboxSettings
 			if ( string.IsNullOrWhiteSpace( text ) ) return null;
 
 			using var doc = JsonDocument.Parse( text );
-			if ( !doc.RootElement.TryGetProperty( "sboxRoot", out var el ) && !doc.RootElement.TryGetProperty( "SboxRoot", out el ) )
-				return null;
+			var hasRoot = doc.RootElement.TryGetProperty( "sboxRoot", out var el ) || doc.RootElement.TryGetProperty( "SboxRoot", out el );
+			string? raw = hasRoot ? el.GetString() : null;
+			string? root = null;
+			if ( !string.IsNullOrWhiteSpace( raw ) )
+			{
+				var norm = Normalize( raw );
+				root = norm ?? raw;
+			}
+			else if ( hasRoot )
+			{
+				// Root was present but empty/whitespace — keep as empty for display, but still allow serverGame.
+				root = raw ?? "";
+			}
+			else
+			{
+				// No root key at all — only allow load if serverGame exists (e.g. file created before root was set).
+				// Otherwise it's not a valid config file.
+				bool hasGame = doc.RootElement.TryGetProperty( "sboxServerGame", out _ ) || doc.RootElement.TryGetProperty( "SboxServerGame", out _ );
+				if ( !hasGame ) return null;
+				root = "";
+			}
 
-			var raw = el.GetString();
-			if ( string.IsNullOrWhiteSpace( raw ) ) return null;
+			// Optional: game ident (fss.bloodsigil) or path to .sbproj for sbox-server
+			string? serverGame = null;
+			if ( doc.RootElement.TryGetProperty( "sboxServerGame", out var sg ) || doc.RootElement.TryGetProperty( "SboxServerGame", out sg ) )
+			{
+				var sgRaw = sg.GetString();
+				if ( !string.IsNullOrWhiteSpace( sgRaw ) )
+					serverGame = NormalizeServerGame( sgRaw );
+			}
 
-			var norm = Normalize( raw );
-			if ( norm is null ) return new SboxConfig( raw );
-			return new SboxConfig( norm );
+			return new SboxConfig( root, serverGame );
 		}
 		catch { return null; }
 	}
 
+	/// <summary>
+	/// Normalizes the sbox-server game value: trims, strips surrounding quotes,
+	/// expands ~ and env vars for .sbproj paths, leaves idents (e.g. fss.bloodsigil) as-is.
+	/// Returns null for empty input.
+	/// </summary>
+	public static string? NormalizeServerGame( string? input )
+	{
+		if ( string.IsNullOrWhiteSpace( input ) ) return null;
+
+		var s = input.Trim();
+
+		// Strip surrounding quotes (user may paste quoted path)
+		if ( ( s.StartsWith( "\"" ) && s.EndsWith( "\"" ) ) || ( s.StartsWith( "'" ) && s.EndsWith( "'" ) ) )
+			s = s[1..^1].Trim();
+
+		if ( string.IsNullOrWhiteSpace( s ) ) return null;
+
+		// If user pasted a full command fragment like "+game fss.bloodsigil" or "game fss.bloodsigil",
+		// strip the leading game switch so we store only the ident/path. Launch will re-add "+game".
+		// Handle: "+game", "-game", "game", with optional quotes around value.
+		{
+			var lower = s.ToLowerInvariant();
+			string? prefix = null;
+			if ( lower.StartsWith( "+game " ) ) prefix = s[6..];
+			else if ( lower.StartsWith( "-game " ) ) prefix = s[6..];
+			else if ( lower.StartsWith( "game " ) ) prefix = s[5..];
+			if ( prefix is not null )
+			{
+				s = prefix.Trim();
+				if ( ( s.StartsWith( "\"" ) && s.EndsWith( "\"" ) ) || ( s.StartsWith( "'" ) && s.EndsWith( "'" ) ) )
+					s = s[1..^1].Trim();
+				if ( string.IsNullOrWhiteSpace( s ) ) return null;
+			}
+		}
+
+		// For .sbproj paths expand ~ and env vars and normalize slashes; for idents keep as-is.
+		// Heuristic: contains '/' or '\' or ends with .sbproj -> treat as path.
+		var isPath = s.Contains( '/' ) || s.Contains( '\\' ) || s.EndsWith( ".sbproj", StringComparison.OrdinalIgnoreCase );
+
+		if ( isPath )
+		{
+			if ( s.StartsWith( "~" ) )
+			{
+				var home = Environment.GetFolderPath( Environment.SpecialFolder.UserProfile );
+				if ( s == "~" ) s = home;
+				else if ( s.StartsWith( "~/", StringComparison.Ordinal ) || s.StartsWith( "~\\", StringComparison.Ordinal ) )
+					s = Path.Combine( home, s[2..] );
+			}
+
+			try { s = Environment.ExpandEnvironmentVariables( s ); } catch { }
+
+			// Don't require file to exist at save time — user may type path before project exists.
+			// Just normalize separators via GetFullPath if it looks absolute.
+			try
+			{
+				if ( Path.IsPathRooted( s ) )
+					s = Path.GetFullPath( s );
+			}
+			catch { }
+		}
+
+		return string.IsNullOrWhiteSpace( s ) ? null : s;
+	}
+
+	public static string? GetSboxServerGame()
+	{
+		return Load()?.SboxServerGame;
+	}
+
+	public static void SaveServerGame( string? serverGame )
+	{
+		var existing = Load();
+		var root = existing?.SboxRoot ?? Resolve() ?? GetStalePersistedPath() ?? "";
+		// Don't overwrite stale/invalid root with empty — just preserve what we have.
+		// If we have no root at all, saving server game alone still needs a placeholder.
+		if ( string.IsNullOrWhiteSpace( root ) )
+		{
+			// No root known; try detection without saving migration if invalid.
+			var detected = RepoRoot.Find();
+			if ( detected is not null ) root = detected;
+		}
+		Save( root, serverGame );
+	}
+
 	public static void Save( string sboxRoot )
 	{
+		// Preserve existing serverGame when only root is being saved (e.g. Resolve migration).
+		var existingGame = Load()?.SboxServerGame;
+		Save( sboxRoot, existingGame );
+	}
+
+	public static void Save( string sboxRoot, string? serverGame )
+	{
 		var norm = Normalize( sboxRoot ) ?? sboxRoot;
+		var normGame = NormalizeServerGame( serverGame );
 		var dir = ConfigDirectory;
 		Directory.CreateDirectory( dir );
 
-		var payload = new { sboxRoot = norm };
-		var json = JsonSerializer.Serialize( payload, new JsonSerializerOptions { WriteIndented = true } );
+		string json;
+		if ( normGame is not null )
+			json = JsonSerializer.Serialize( new { sboxRoot = norm, sboxServerGame = normGame }, new JsonSerializerOptions { WriteIndented = true } );
+		else
+			json = JsonSerializer.Serialize( new { sboxRoot = norm }, new JsonSerializerOptions { WriteIndented = true } );
 
 		var tmp = ConfigPath + ".tmp";
 		File.WriteAllText( tmp, json );

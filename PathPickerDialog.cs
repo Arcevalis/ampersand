@@ -23,6 +23,7 @@ internal static class PathPickerDialog
 		var dialog = new Window
 		{
 			Title = "Select s&box location",
+			Icon = AppIcon.Icon,
 			Width = 560,
 			SizeToContent = SizeToContent.Height,
 			CanResize = false,

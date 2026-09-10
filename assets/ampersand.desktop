@@ -1,0 +1,9 @@
+[Desktop Entry]
+Name=Ampersand
+Comment=s&box launcher for Linux
+Exec=ampersand
+Icon=ampersand
+Type=Application
+Categories=Development;
+Terminal=false
+StartupWMClass=ampersand
