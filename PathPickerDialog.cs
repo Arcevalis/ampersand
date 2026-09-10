@@ -34,7 +34,7 @@ internal static class PathPickerDialog
 
 		var hint = new TextBlock
 		{
-			Text = "Pick the s&box install folder — the one containing game/ and engine/."
+			Text = "Pick the s&box install folder (the one containing game/ and engine/)."
 				+ "\nYou can also paste a path to game/ or game/sbox; it will be normalized.",
 			TextWrapping = TextWrapping.Wrap,
 			Foreground = TerminalTheme.FooterText,

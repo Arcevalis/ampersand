@@ -5,7 +5,7 @@
 #
 # AppContext.BaseDirectory inside the app therefore points at
 # $HERE/usr/bin/, where install-appimage.sh places scripts/ alongside the
-# binary — so AppPaths.FindScriptsDir() needs no special-casing.
+# binary, so AppPaths.FindScriptsDir() needs no special-casing.
 #
 # For self-contained single-file publish, force bundle extraction into the
 # user's cache instead of the default temp extraction on every launch.

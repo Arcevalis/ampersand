@@ -15,7 +15,7 @@
 #   --framework-dependent Framework-dependent publish, requires .NET 10 runtime on host
 #   --icon FILE           App icon PNG (default: <source>/assets/ampersand.png)
 #   --base-appimage FILE  AppImage to extract full runtime skeleton from
-#                         (AppRun, libs, runtime/ — everything except usr/bin,
+#                         (AppRun, libs, runtime/; everything except usr/bin,
 #                         which is replaced with the new publish output)
 #   --install-dir DIR     Where to install the finished AppImage
 #                         (default: $HOME/Applications)
@@ -118,7 +118,7 @@ die_if_running() {
 
 # ── Step 1: dotnet publish ───────────────────────────────────────────────────
 if [[ $DO_BUILD -eq 1 ]]; then
-	command -v dotnet >/dev/null 2>&1 || die "dotnet not on PATH — install .NET 10 SDK: https://dotnet.microsoft.com/download"
+	command -v dotnet >/dev/null 2>&1 || die "dotnet not on PATH. Install .NET 10 SDK: https://dotnet.microsoft.com/download"
 
 	log "Publishing Ampersand ($CONFIG, $RUNTIME, self-contained=$SELF_CONTAINED)..."
 	mkdir -p "$PUBLISH_DIR"
@@ -140,7 +140,7 @@ if [[ $DO_BUILD -eq 1 ]]; then
 	# The csproj copies apps/** to scripts/ on build, but ensure the publish
 	# output has them regardless of MSBuild path-separator quirks.
 	if [[ ! -f "$PUBLISH_DIR/scripts/sbox.sh" ]]; then
-		log "Publish output missing scripts/ — copying from apps/..."
+		log "Publish output missing scripts/, copying from apps/..."
 		mkdir -p "$PUBLISH_DIR/scripts"
 		cp "$SOURCE_DIR"/apps/*.sh "$PUBLISH_DIR/scripts/"
 	fi
@@ -152,7 +152,7 @@ BUILT_BINARY="${PUBLISH_DIR}/ampersand"
 [[ -f "$BUILT_BINARY" ]] || die "Build output not found: $BUILT_BINARY (run without --no-build first)"
 [[ -f "$PUBLISH_DIR/scripts/sbox.sh" ]] || die "Scripts missing: $PUBLISH_DIR/scripts/sbox.sh"
 
-log "Publish output: $(du -sh "$PUBLISH_DIR" | cut -f1) — ${PUBLISH_DIR}"
+log "Publish output: $(du -sh "$PUBLISH_DIR" | cut -f1) (${PUBLISH_DIR})"
 
 # ── Step 2: Get appimagetool ─────────────────────────────────────────────────
 if [[ ! -x "$APPIMAGE_TOOL" ]]; then
@@ -171,7 +171,7 @@ if [[ -n "$BASE_APPIMAGE" && -f "$BASE_APPIMAGE" ]]; then
 	log "Extracting runtime skeleton from: ${BASE_APPIMAGE}"
 	(cd "$OUTPUT_DIR" && "$BASE_APPIMAGE" --appimage-extract 2>/dev/null)
 	mv "${OUTPUT_DIR}/squashfs-root" "$APPDIR"
-	# Drop the old payload — the fresh publish output replaces it below.
+	# Drop the old payload; the fresh publish output replaces it below.
 	# Keep AppRun, runtime/, lib/, metadata from the base.
 	rm -rf "${APPDIR}/usr/bin/ampersand" "${APPDIR}/usr/bin/ampersand.dll" \
 		"${APPDIR}/usr/bin/"*.dll "${APPDIR}/usr/bin/"*.json \
@@ -180,9 +180,9 @@ if [[ -n "$BASE_APPIMAGE" && -f "$BASE_APPIMAGE" ]]; then
 		"${APPDIR}/"*.desktop "${APPDIR}/"*.png "${APPDIR}/.DirIcon"
 else
 	if [[ -n "$BASE_APPIMAGE" ]]; then
-		log "Base AppImage not found ($BASE_APPIMAGE) — creating minimal AppDir skeleton"
+		log "Base AppImage not found ($BASE_APPIMAGE), creating minimal AppDir skeleton"
 	else
-		log "No base AppImage — creating minimal AppDir skeleton"
+		log "No base AppImage, creating minimal AppDir skeleton"
 	fi
 	mkdir -p "$APPDIR"
 fi
@@ -211,7 +211,7 @@ cp "${SOURCE_DIR}/assets/ampersand.desktop" "${APPDIR}/ampersand.desktop"
 cp "${SOURCE_DIR}/assets/ampersand.desktop" "${APPDIR}/usr/share/applications/ampersand.desktop"
 
 # Icon (top-level for appimagetool + hicolor + .DirIcon)
-[[ -f "$ICON_FILE" ]] || die "Icon not found: $ICON_FILE — save the provided logo to assets/ampersand.png or pass --icon FILE"
+[[ -f "$ICON_FILE" ]] || die "Icon not found: $ICON_FILE. Save the provided logo to assets/ampersand.png or pass --icon FILE"
 cp "$ICON_FILE" "${APPDIR}/ampersand.png"
 cp "$ICON_FILE" "${APPDIR}/usr/share/icons/hicolor/256x256/apps/ampersand.png"
 cp "$ICON_FILE" "${APPDIR}/.DirIcon"
@@ -229,11 +229,11 @@ chmod +x "$OUTPUT_APPIMAGE"
 # ── Step 6: Cleanup ──────────────────────────────────────────────────────────
 rm -rf "$APPDIR"
 
-log "Done: $(du -sh "$OUTPUT_APPIMAGE" | cut -f1) — ${OUTPUT_APPIMAGE}"
+log "Done: $(du -sh "$OUTPUT_APPIMAGE" | cut -f1) (${OUTPUT_APPIMAGE})"
 
 # ── Step 7: Install ──────────────────────────────────────────────────────────
 # Copy the AppImage to its standard home, drop the .desktop entry and icon into
-# the usual user locations, and refresh the menu caches — so the app is
+# the usual user locations, and refresh the menu caches so the app is
 # launchable from the menu right after building. The entry itself runs in a
 # terminal (Terminal=true), so no extra terminal shim is needed.
 if [[ $DO_INSTALL -eq 1 ]]; then
@@ -249,7 +249,7 @@ if [[ $DO_INSTALL -eq 1 ]]; then
 		log "Installing AppImage → ${INSTALL_TARGET}..."
 		cp -f "$OUTPUT_APPIMAGE" "$INSTALL_TARGET"
 	else
-		log "Output is already in the install dir — skipping copy."
+		log "Output is already in the install dir, skipping copy."
 	fi
 	chmod +x "$INSTALL_TARGET"
 
@@ -283,15 +283,24 @@ EOF
 	fi
 
 	# The old ~/.local/bin/ampersand shim is obsolete (the entry itself runs in
-	# a terminal now) — remove it if a previous build created one.
+	# a terminal now); remove it if a previous build created one.
 	rm -f "${HOME}/.local/bin/ampersand"
 
+	# Every tool here is optional: the .desktop + icon locations are
+	# XDG-standard, so any freedesktop-compliant desktop (KDE, GNOME,
+	# XFCE, ...) picks the entry up. Refresh whichever caches exist.
 	if command -v update-desktop-database >/dev/null 2>&1; then
 		update-desktop-database "$(dirname "$DESKTOP_FILE")" >/dev/null 2>&1 || true
 	fi
-	if command -v kbuildsycoca6 >/dev/null 2>&1; then
-		kbuildsycoca6 --noincremental >/dev/null 2>&1 || true
+	if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+		gtk-update-icon-cache -f -t "${HOME}/.local/share/icons/hicolor" >/dev/null 2>&1 || true
 	fi
+	for kbuild in kbuildsycoca6 kbuildsycoca5; do
+		if command -v "$kbuild" >/dev/null 2>&1; then
+			"$kbuild" --noincremental >/dev/null 2>&1 || true
+			break
+		fi
+	done
 
 	log "Installed:"
 	log "  app:      $INSTALL_TARGET"
@@ -304,8 +313,14 @@ EOF
 	# GUI), so fix its file directly: drop our filename from <Exclude>
 	# blocks at any level and pin it in the Development submenu's
 	# Layout + Include. The cache rebuild below then picks the change up.
+	# KDE-only file: absent on GNOME/XFCE/etc., where Categories=Development
+	# in the entry handles placement on its own.
 	MENU_LAYOUT="${HOME}/.config/menus/applications-kmenuedit.menu"
-	if [[ -f "$MENU_LAYOUT" ]]; then
+	if [[ ! -f "$MENU_LAYOUT" ]]; then
+		: # No KDE menu layout; nothing to fix.
+	elif ! command -v python3 >/dev/null 2>&1; then
+		log "WARNING: python3 not found, cannot check ${MENU_LAYOUT} for entries hiding Ampersand.desktop."
+	else
 		MENU_STATE="$(python3 - "$MENU_LAYOUT" "Ampersand.desktop" <<'PYEOF' 2>/dev/null
 import shutil
 import sys
@@ -341,7 +356,7 @@ for parent in root.iter():
             parent.remove(child)
 
 # 2. The Development submenu must list it (Layout + Include), else it can
-# vanish from there. Never create submenus — Categories covers defaults.
+# vanish from there. Never create submenus; Categories covers defaults.
 for child in root:
     if local(child.tag) != "Menu":
         continue
@@ -381,8 +396,8 @@ print("fixed:" + ",".join(sorted(set(changed))))
 PYEOF
 )"
 		case "$MENU_STATE" in
-			fixed:*) log "Menu layout hid Ampersand.desktop — fixed (${MENU_STATE#fixed:}; backup at ${MENU_LAYOUT}.bak)." ;;
-			unparseable*) log "WARNING: could not parse ${MENU_LAYOUT} (${MENU_STATE#unparseable: }) — menu visibility unknown." ;;
+			fixed:*) log "Menu layout hid Ampersand.desktop, fixed (${MENU_STATE#fixed:}; backup at ${MENU_LAYOUT}.bak)." ;;
+			unparseable*) log "WARNING: could not parse ${MENU_LAYOUT} (${MENU_STATE#unparseable: }), menu visibility unknown." ;;
 		esac
 	fi
 fi

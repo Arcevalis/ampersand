@@ -160,7 +160,7 @@ internal sealed class MainWindow : Window
 			}, supportsRecycling: true )
 		};
 
-		// Selection only — launch is exclusively via the per-row play button.
+		// Selection only; launch is exclusively via the per-row play button.
 		// Single click selects so the Steam Runtime / terminal toggles can be
 		// set before starting; double-click no longer starts a launch.
 		targetList.SelectionChanged += ( _, _ ) => ShowSelected();
@@ -230,7 +230,7 @@ internal sealed class MainWindow : Window
 		var targetPanel = Surface( targetList, TerminalTheme.TargetPanel, new Thickness( 0, 0, 0, 1 ) );
 		var barPanel = Surface( bar, TerminalTheme.ToolbarPanel, new Thickness( 0 ) );
 
-		// Dedicated server game field — only visible when sbox-server is selected.
+		// Dedicated server game field, only visible when sbox-server is selected.
 		// Accepts either a package ident (fss.bloodsigil) or an absolute path to a .sbproj.
 		sboxServerGameBox = new TextBox
 		{
@@ -995,7 +995,7 @@ internal sealed class MainWindow : Window
 		var valid = SboxSettings.IsValid( resolvedRoot );
 		var display = SboxSettings.ShortenForDisplay( resolvedRoot, 42 );
 		sboxPathBox.Text = valid ? display : "⚠ stale: " + display;
-		ToolTip.SetTip( sboxPathBox, resolvedRoot + ( valid ? "" : "\n(stale — folder no longer contains game/ + engine/ + game/sbox)" ) + "\nStored in " + SboxSettings.ConfigPath );
+		ToolTip.SetTip( sboxPathBox, resolvedRoot + ( valid ? "" : "\n(stale: folder no longer contains game/ + engine/ + game/sbox)" ) + "\nStored in " + SboxSettings.ConfigPath );
 	}
 
 	private void UpdateSboxServerGameDisplay()
@@ -1213,7 +1213,7 @@ internal sealed class MainWindow : Window
 		if ( stale is not null && !SboxSettings.IsValid( stale ) )
 			statusText.Text = "s&box location stale: " + stale;
 		else
-			statusText.Text = "Select s&box location — no valid install found";
+			statusText.Text = "Select s&box location (no valid install found)";
 
 		await PickAndSavePathAsync( isFirstRun: true );
 	}

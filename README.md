@@ -65,7 +65,9 @@ No `dotnet` needed at runtime: the default build is self-contained
 `~/Applications/`, a menu entry goes to
 `~/.local/share/applications/Ampersand.desktop` and the icon to
 `~/.local/share/icons/`. The menu entry runs in a terminal
-(`Terminal=true`), so no extra launcher is needed. On first launch, point
+(`Terminal=true`), so no extra launcher is needed. Paths are XDG-standard
+so non-KDE desktops (GNOME, XFCE and similar) work too; the menu-layout
+fix only runs where a KDE layout exists. On first launch, point
 it at your s&amp;box checkout when asked.
 
 ### Option B: dev build

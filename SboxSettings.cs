@@ -120,12 +120,12 @@ internal static class SboxSettings
 			}
 			else if ( hasRoot )
 			{
-				// Root was present but empty/whitespace — keep as empty for display, but still allow serverGame.
+				// Root was present but empty/whitespace, so keep as empty for display, but still allow serverGame.
 				root = raw ?? "";
 			}
 			else
 			{
-				// No root key at all — only allow load if serverGame exists (e.g. file created before root was set).
+				// No root key at all, so only allow load if serverGame exists (e.g. file created before root was set).
 				// Otherwise it's not a valid config file.
 				bool hasGame = doc.RootElement.TryGetProperty( "sboxServerGame", out _ ) || doc.RootElement.TryGetProperty( "SboxServerGame", out _ );
 				if ( !hasGame ) return null;
@@ -197,7 +197,7 @@ internal static class SboxSettings
 
 			try { s = Environment.ExpandEnvironmentVariables( s ); } catch { }
 
-			// Don't require file to exist at save time — user may type path before project exists.
+			// Don't require file to exist at save time; user may type path before project exists.
 			// Just normalize separators via GetFullPath if it looks absolute.
 			try
 			{
@@ -219,7 +219,7 @@ internal static class SboxSettings
 	{
 		var existing = Load();
 		var root = existing?.SboxRoot ?? Resolve() ?? GetStalePersistedPath() ?? "";
-		// Don't overwrite stale/invalid root with empty — just preserve what we have.
+		// Don't overwrite stale/invalid root with empty, just preserve what we have.
 		// If we have no root at all, saving server game alone still needs a placeholder.
 		if ( string.IsNullOrWhiteSpace( root ) )
 		{

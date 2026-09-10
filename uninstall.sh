@@ -88,7 +88,7 @@ if [[ -f "$DESKTOP_FILE" ]]; then
 		log "Removing desktop entry → ${DESKTOP_FILE}..."
 		rm -f "$DESKTOP_FILE"
 	else
-		log "WARNING: ${DESKTOP_FILE} does not point at ${INSTALL_TARGET} — leaving it alone."
+		log "WARNING: ${DESKTOP_FILE} does not point at ${INSTALL_TARGET}, leaving it alone."
 	fi
 else
 	log "Desktop entry not present, skipping."
@@ -112,7 +112,13 @@ rm -f "${HOME}/.local/bin/ampersand"
 # dangling entry stays behind. kmenuedit owns this file and exposes no
 # scriptable API, so edit the parsed XML directly (with backup).
 MENU_LAYOUT="${HOME}/.config/menus/applications-kmenuedit.menu"
-if [[ $DO_MENU -eq 1 && -f "$MENU_LAYOUT" ]]; then
+if [[ $DO_MENU -eq 0 ]]; then
+	: # --keep-menu: layout untouched.
+elif [[ ! -f "$MENU_LAYOUT" ]]; then
+	: # No KDE menu layout (e.g. GNOME/XFCE); nothing to clean.
+elif ! command -v python3 >/dev/null 2>&1; then
+	log "WARNING: python3 not found, menu layout left untouched."
+else
 	MENU_STATE="$(python3 - "$MENU_LAYOUT" "Ampersand.desktop" <<'PYEOF' 2>/dev/null
 import shutil
 import sys
@@ -176,16 +182,24 @@ PYEOF
 )"
 	case "$MENU_STATE" in
 		removed:*) log "Dropped Ampersand.desktop from Development menu (${MENU_STATE#removed:}; backup at ${MENU_LAYOUT}.bak)." ;;
-		unparseable*) log "WARNING: could not parse ${MENU_LAYOUT} (${MENU_STATE#unparseable: }) — left untouched." ;;
+		unparseable*) log "WARNING: could not parse ${MENU_LAYOUT} (${MENU_STATE#unparseable: }), left untouched." ;;
 	esac
 fi
 
 # ── Step 5: refresh caches ───────────────────────────────────────────────────
+# Same optional-tool policy as install: refresh whatever the running
+# desktop provides, assume nothing.
 if command -v update-desktop-database >/dev/null 2>&1; then
 	update-desktop-database "$(dirname "$DESKTOP_FILE")" >/dev/null 2>&1 || true
 fi
-if command -v kbuildsycoca6 >/dev/null 2>&1; then
-	kbuildsycoca6 --noincremental >/dev/null 2>&1 || true
+if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+	gtk-update-icon-cache -f -t "${HOME}/.local/share/icons/hicolor" >/dev/null 2>&1 || true
 fi
+for kbuild in kbuildsycoca6 kbuildsycoca5; do
+	if command -v "$kbuild" >/dev/null 2>&1; then
+		"$kbuild" --noincremental >/dev/null 2>&1 || true
+		break
+	fi
+done
 
 log "Uninstalled."
