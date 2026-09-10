@@ -56,7 +56,7 @@ spawns yours and gets out of the way.
 ### Option A: AppImage (recommended)
 
 ```sh
-./build-appimage.sh
+./install-appimage.sh
 ./Ampersand-x86_64.AppImage
 ```
 
@@ -94,12 +94,12 @@ dotnet run -c Release
 
 ### AppImage
 
-`build-appimage.sh` publishes Ampersand and packs it with `appimagetool`,
+`install-appimage.sh` publishes Ampersand and packs it with `appimagetool`,
 following the same shape as the UZDoom AppImage script (download tool if
 missing → prepare AppDir → populate `usr/` tree → repack → clean up):
 
 ```sh
-./build-appimage.sh [OPTIONS]
+./install-appimage.sh [OPTIONS]
 ```
 
 | Option | Default | Description |
@@ -122,13 +122,20 @@ Examples:
 
 ```sh
 # Standard self-contained AppImage
-./build-appimage.sh
+./install-appimage.sh
 
 # Small build for a machine that already has the .NET 10 runtime
-./build-appimage.sh --framework-dependent --output ~/Ampersand.AppImage
+./install-appimage.sh --framework-dependent --output ~/Ampersand.AppImage
 
 # Fast iteration on packaging (desktop file, icon, AppRun) without recompiling
-./build-appimage.sh --no-build
+./install-appimage.sh --no-build
+```
+
+To remove an installed AppImage again (installed file, menu entry, icon
+and Development menu pinning; build outputs in the source dir are kept):
+
+```sh
+./uninstall.sh
 ```
 
 Inside the AppImage the layout is:
@@ -242,7 +249,8 @@ SboxSettings.cs         # persisted s&box path + server game (~/.local/share/…
 RepoRoot.cs / AppPaths.cs / RunLog.cs / Ansi.cs / TerminalTheme.cs …
 apps/                   # launch scripts (sbox.sh, sbox-dev.sh, sbox-server.sh, build.sh, _common.sh)
 assets/                 # ampersand.desktop, AppRun, ampersand.png (logo)
-build-appimage.sh       # publish → AppDir → AppImage
+install-appimage.sh       # publish → AppDir → AppImage → install
+uninstall.sh              # remove an install (AppImage, entry, icon, menu pin)
 bootstrap.sh            # dev build shortcut (dotnet build -c Release)
 ```
 
@@ -257,5 +265,5 @@ bootstrap.sh            # dev build shortcut (dotnet build -c Release)
 | `No terminal emulator found` | Install one (`gnome-terminal`, `konsole`, `alacritty`, `kitty`, `foot`, `xterm`), or untick *Launch with system terminal* to run headless with log capture. |
 | `_exe not found (run ./bootstrap.sh first)` | The engine isn't built yet. Use **Build S&Box**. |
 | AppImage won't run (`fuse` errors) | Install `fuse2`/`libfuse2`, or extract once: `./Ampersand-x86_64.AppImage --appimage-extract` and run `squashfs-root/AppRun`. |
-| Rebuild fails with `Text file busy` | The target AppImage is still running. Quit it and run `build-appimage.sh` again (the script checks for this first). |
+| Rebuild fails with `Text file busy` | The target AppImage is still running. Quit it and run `install-appimage.sh` again (the script checks for this first). |
 | Menu entry missing after editing the menu | KDE Menu Editor can write a root `<Exclude>` for `Ampersand.desktop` into `~/.config/menus/applications-kmenuedit.menu`, which hides it everywhere. The install step removes that block, pins the entry in Development and rebuilds the menu cache (backup at `applications-kmenuedit.menu.bak`). |

@@ -4,7 +4,7 @@
 # and execs the published .NET binary in usr/bin/.
 #
 # AppContext.BaseDirectory inside the app therefore points at
-# $HERE/usr/bin/, where build-appimage.sh places scripts/ alongside the
+# $HERE/usr/bin/, where install-appimage.sh places scripts/ alongside the
 # binary — so AppPaths.FindScriptsDir() needs no special-casing.
 #
 # For self-contained single-file publish, force bundle extraction into the

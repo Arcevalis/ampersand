@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# build-appimage.sh
-# Builds Ampersand from source and packages it as an AppImage.
+# install-appimage.sh
+# Builds Ampersand from source, packages it as an AppImage and installs it.
 #
 # Usage:
-#   ./build-appimage.sh [OPTIONS]
+#   ./install-appimage.sh [OPTIONS]
 #
 # Options:
 #   --source DIR          Ampersand source dir (default: this script's dir)
@@ -20,14 +20,14 @@
 #   --install-dir DIR     Where to install the finished AppImage
 #                         (default: $HOME/Applications)
 #   --no-install          Skip the install step (leave the AppImage at --output
-#                         only, no .desktop / icon / terminal link)
+#                         only, no .desktop / icon)
 #   --no-build            Skip dotnet publish step (repackage existing publish output)
 #   -h, --help            Show this help
 #
 # Examples:
-#   ./build-appimage.sh
-#   ./build-appimage.sh --output ~/Ampersand-x86_64.AppImage
-#   ./build-appimage.sh --framework-dependent --no-build
+#   ./install-appimage.sh
+#   ./install-appimage.sh --output ~/Ampersand-x86_64.AppImage
+#   ./install-appimage.sh --framework-dependent --no-build
 #
 # Notes:
 #   - Requires .NET 10 SDK (dotnet on PATH). The published app targets net10.0.
@@ -87,8 +87,8 @@ APPIMAGE_TOOL="${OUTPUT_DIR}/appimagetool"
 APPDIR="${OUTPUT_DIR}/.ampersand-appdir"
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
-log()  { echo "[build-appimage] $*"; }
-die()  { echo "[build-appimage] ERROR: $*" >&2; exit 1; }
+log()  { echo "[install-appimage] $*"; }
+die()  { echo "[install-appimage] ERROR: $*" >&2; exit 1; }
 
 # Refuse to write over a running executable: the kernel forbids it (ETXTBSY,
 # "Text file busy"), so name the PIDs instead of letting the copy/pack fail.
