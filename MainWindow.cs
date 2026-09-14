@@ -618,6 +618,11 @@ internal sealed class MainWindow : Window
 			return;
 		}
 
+		// SDL embed fix shim: offer to build it now rather than failing inside
+		// the launch scripts when it is missing.
+		if ( !await EnsureSdlWinFixShimAsync( root, target ) )
+			return;
+
 		var env = new Dictionary<string, string>
 		{
 			["SBOX_REPO_ROOT"] = root,
@@ -790,6 +795,91 @@ internal sealed class MainWindow : Window
 			root,
 			passed ) );
 
+		return true;
+	}
+
+	/// The SDL embed fix needs its helper library built (bootstrap-linux/patches/
+	/// libsdlwinfix.so). The launch scripts hard-fail when the fix is enabled but
+	/// the library is missing, so offer to build it here with a modal instead of
+	/// failing later inside the terminal. Only the game/editor scripts consume
+	/// _common.sh; sbox-server.sh is standalone and never touches the shim.
+	/// </summary>
+	private async Task<bool> EnsureSdlWinFixShimAsync( string root, LaunchTarget target )
+	{
+		if ( sdlWinFix.IsChecked != true || target.ScriptFile == "sbox-server.sh" )
+			return true;
+
+		var dir = Path.Combine( root, "bootstrap-linux", "patches" );
+		var so = Environment.GetEnvironmentVariable( "SBOX_SDLWINFIX_SO" );
+		if ( string.IsNullOrWhiteSpace( so ) )
+			so = Path.Combine( dir, "libsdlwinfix.so" );
+		if ( File.Exists( so ) )
+			return true;
+
+		var build = await ConfirmDialog.Show( this, "SDL embed fix shim missing",
+			"The SDL embed fix is enabled, but its helper library has not been built yet:\n"
+				+ so + "\n\nBuild it now? This runs gcc in bootstrap-linux/patches/ and takes a few seconds.",
+			"Build it", "Cancel launch" );
+		if ( !build )
+		{
+			statusText.Text = target.Name + ": launch cancelled (shim not built)";
+			UpdateStatusBar();
+			return false;
+		}
+
+		var src = Path.Combine( dir, "sdlwinfix.c" );
+		if ( !File.Exists( src ) )
+		{
+			await Fail( target, "Shim source missing",
+				"Expected the shim source at:\n" + src + "\n\nUpdate the sbox checkout, or untick the SDL embed fix." );
+			return false;
+		}
+
+		statusText.Text = target.Name + ": building sdlwinfix shim...";
+		UpdateStatusBar();
+
+		var (exit, output) = await Task.Run( () =>
+		{
+			using var proc = new Process
+			{
+				StartInfo = new ProcessStartInfo
+				{
+					FileName = "gcc",
+					WorkingDirectory = dir,
+					UseShellExecute = false,
+					RedirectStandardOutput = true,
+					RedirectStandardError = true
+				}
+			};
+			foreach ( var arg in new[] { "-D_GNU_SOURCE", "-shared", "-fPIC", "-O1", "-o", so, "sdlwinfix.c", "-ldl", "-lX11" } )
+				proc.StartInfo.ArgumentList.Add( arg );
+			try
+			{
+				proc.Start();
+			}
+			catch ( System.ComponentModel.Win32Exception e )
+			{
+				// gcc itself is missing.
+				return (-1, e.Message);
+			}
+			// gcc output is small; drain stdout first, then wait, then stderr.
+			var stdout = proc.StandardOutput.ReadToEnd();
+			proc.WaitForExit();
+			var stderr = proc.StandardError.ReadToEnd();
+			return (proc.ExitCode, (stdout + "\n" + stderr).Trim());
+		} );
+
+		if ( exit == -1 )
+		{
+			await Fail( target, "gcc not found",
+				"Could not start gcc: " + output + "\n\nInstall gcc and the X11 headers to build the shim, or untick the SDL embed fix." );
+			return false;
+		}
+		if ( exit != 0 || !File.Exists( so ) )
+		{
+			await Fail( target, "Shim build failed", "gcc exited with code " + exit + ":\n\n" + output );
+			return false;
+		}
 		return true;
 	}
 
