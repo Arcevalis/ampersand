@@ -50,13 +50,13 @@ sbox_exec()
 
 	_exe="$GAME_DIR/$_exe_name"
 	if [ ! -x "$_exe" ]; then
-		echo "error: $_exe not found or not executable - run ./bootstrap.sh first" >&2
+		echo "error: $_exe not found or not executable - run Ampersand's Build S&Box first" >&2
 		exit 1
 	fi
 
 	_harfbuzz="$NATIVE_DIR/libHarfBuzzSharp.so"
 	if [ ! -f "$_harfbuzz" ]; then
-		echo "error: HarfBuzz not found at $_harfbuzz - run ./bootstrap.sh first" >&2
+		echo "error: HarfBuzz not found at $_harfbuzz - run Ampersand's Build S&Box first" >&2
 		exit 1
 	fi
 
@@ -66,22 +66,25 @@ sbox_exec()
 
 	# TRANSIENT stopgap for the Linux/XWayland foreign-window embedding gap
 	# (Qt never forwards geometry to the embedded SDL window, so SDL's
-	# size/position answers fossilize - bootstrap-linux/patches/sdlwinfix.c).
-	# Remove this block + the two shim files once Facepunch fixes it natively.
+	# size/position answers fossilize - ampersand vendors the shim source at
+	# apps/patches/sdlwinfix.c and builds it into the ampersand cache dir).
+	# Remove this block + apps/patches/ once Facepunch fixes it natively.
 	# Opt-in only: SBOX_SDLWINFIX=observe (log topology, fake nothing) or =1
 	# (report live parent-widget geometry). Default off. Kill switch: =0.
-	# The .so is built on demand and NOT rebuilt here; a missing file when
-	# enabled is a hard error so a silent no-op never masquerades as a fix.
+	# The .so is built on demand by the launcher and NOT rebuilt here; a
+	# missing file when enabled is a hard error so a silent no-op never
+	# masquerades as a fix. Override the location with SBOX_SDLWINFIX_SO.
 	# The log defaults to game/logs/sdlwinfix.log (truncated here each run,
 	# the shim only appends); override with SDLWINFIX_LOG. The shim goes
 	# after HarfBuzz in LD_PRELOAD - HarfBuzz-first ordering is required
 	# (see above). Note: only --env allowlisted variables cross into the
 	# Steam runtime container, so use host-side runs for trials.
 	if [ "${SBOX_SDLWINFIX:-0}" != "0" ]; then
-		_sdlwinfix_so="${SBOX_SDLWINFIX_SO:-$ROOT/bootstrap-linux/patches/libsdlwinfix.so}"
+		_sdlwinfix_so="${SBOX_SDLWINFIX_SO:-${XDG_CACHE_HOME:-$HOME/.cache}/sbox-ampersand/libsdlwinfix.so}"
 		if [ ! -f "$_sdlwinfix_so" ]; then
 			echo "error: SBOX_SDLWINFIX=$SBOX_SDLWINFIX but fix shim missing at $_sdlwinfix_so" >&2
-			echo "build it: gcc -D_GNU_SOURCE -shared -fPIC -O1 -o libsdlwinfix.so sdlwinfix.c -ldl -lX11 (in bootstrap-linux/patches/)" >&2
+			echo "launch once via Ampersand with the SDL embed fix ticked to build it," >&2
+			echo "or build it by hand: gcc -D_GNU_SOURCE -shared -fPIC -O1 -o libsdlwinfix.so sdlwinfix.c -ldl -lX11" >&2
 			exit 1
 		fi
 		if [ -z "${SDLWINFIX_LOG:-}" ]; then

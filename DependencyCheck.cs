@@ -59,7 +59,7 @@ internal static class DependencyCheck
 		emit( Ansi.Dim + "native   " + Ansi.Reset + native
 			+ ( Directory.Exists( native ) ? "" : Ansi.Red + "   (MISSING)" + Ansi.Reset ) );
 		emit( Ansi.Dim + "dotnet   " + Ansi.Reset
-			+ ( dotnet ?? Ansi.Red + "not found - run ./bootstrap.sh" + Ansi.Reset ) );
+			+ ( dotnet ?? Ansi.Red + "not found - run Build S&Box" + Ansi.Reset ) );
 		emit( "" );
 
 		var sweep = new List<string> { "/bin/sh", "-c", SweepScript };

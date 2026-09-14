@@ -31,7 +31,7 @@ NATIVE_DIR="$GAME_DIR/bin/linuxsteamrt64"
 
 _exe="$GAME_DIR/sbox-server"
 if [ ! -x "$_exe" ]; then
-	echo "error: $_exe not found or not executable - run ./bootstrap.sh first" >&2
+	echo "error: $_exe not found or not executable - run Ampersand's Build S&Box first" >&2
 	exit 1
 fi
 

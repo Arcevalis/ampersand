@@ -142,8 +142,8 @@ internal static class SboxSettings
 		}
 
 		// Optional: TRANSIENT stopgap toggle for the Linux/XWayland SDL
-		// embedding gap (sdlwinfix.c). Delete with the shim once Facepunch
-		// fixes it natively. Absent key = off.
+		// embedding gap (vendored apps/patches/sdlwinfix.c). Delete with the
+		// shim once Facepunch fixes it natively. Absent key = off.
 		var sdlWinFix = false;
 		if ( doc.RootElement.TryGetProperty( "sdlWinFix", out var swf ) || doc.RootElement.TryGetProperty( "SdlWinFix", out swf ) )
 		{
