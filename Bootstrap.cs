@@ -7,120 +7,80 @@ using System.Linq;
 namespace Ampersand;
 
 /// <summary>
-/// Ampersand port of sbox-public/bootstrap.sh.
+/// Build S&Box through the engine's own <c>Setup.sh</c>, with ampersand's
+/// native-dependency sweep as a post-flight report.
 /// <para>
-/// Fetches prebuilt natives, validates their shared-library dependencies on the
-/// host, then drives SboxBuild through build / build-shaders / build-content -
-/// the same sequence the shell script does, but as a first-class Tool that can be
-/// launched from the sidebar in a real terminal (Program.BootstrapArgument) with
-/// SGR colour and proper logging.
-/// </para>
-/// <para>
-/// Order matters: natives are fetched before the ldd sweep so the check sees what
-/// the build is about to use, exactly as bootstrap.sh does (Steps/Build.cs:19 and
-/// bootstrap.sh:12-16). build-shaders and build-content are best-effort on Linux
-/// and only warn on failure.
+/// History: this used to be a full port of the old
+/// <c>sbox-public/bootstrap.sh</c> (fetch natives → ldd sweep → drive SboxBuild
+/// step by step). The engine now owns that flow: <c>Setup.sh</c> runs the
+/// <c>bootstrap</c> stage (git hooks, per-platform artifact download, bindings,
+/// managed, shaders, content) and its git hooks keep artifacts fresh after
+/// pulls - so duplicating the sequence here only drifted. What Setup.sh does
+/// not do is the readable per-binary <c>ldd</c> report, which stays here (and
+/// in DependencyCheck) as ampersand-specific value. Launched from the sidebar
+/// in a real terminal (Program.BootstrapArgument) with SGR colour.
 /// </para>
 /// </summary>
 internal static class Bootstrap
 {
 	public static void Run( string repoRoot, Action<string> emit, bool skipDeps = false )
 	{
-		emit( Ansi.Bold + Ansi.White + "=== bootstrap ===" + Ansi.NoBold + Ansi.Reset );
+		emit( Ansi.Bold + Ansi.White + "=== build s&box ===" + Ansi.NoBold + Ansi.Reset );
 		emit( Ansi.Dim + "repo  " + Ansi.Reset + repoRoot );
 		emit( "" );
 
-		var sboxBuildProj = Path.Combine( repoRoot, "engine", "Tools", "SboxBuild", "SboxBuild.csproj" );
-		if ( !File.Exists( sboxBuildProj ) )
+		var setupSh = Path.Combine( repoRoot, "Setup.sh" );
+		if ( !File.Exists( setupSh ) )
 		{
-			emit( Ansi.Red + "  SboxBuild not found: " + sboxBuildProj + Ansi.Reset );
-			emit( Ansi.Dim + "  Is this a valid s&box checkout (game/ + engine/)?" + Ansi.Reset );
+			emit( Ansi.Red + "  Setup.sh not found: " + setupSh + Ansi.Reset );
+			emit( Ansi.Dim + "  This checkout predates the engine's Setup.sh workflow - pull sbox-public first." + Ansi.Reset );
 			return;
 		}
 
 		if ( Which( "dotnet" ) is null )
 		{
-			emit( Ansi.Red + "  dotnet not on PATH - cannot run SboxBuild." + Ansi.Reset );
+			emit( Ansi.Red + "  dotnet not on PATH - cannot run Setup.sh." + Ansi.Reset );
 			emit( Ansi.Dim + "  Install .NET 10 SDK: https://dotnet.microsoft.com/download" + Ansi.Reset );
 			return;
 		}
 
-		int nativeDepsResult = 0;
+		// --- engine setup (heavy lifting lives here) --------------------------
+		emit( Ansi.Bold + Ansi.Cyan + "--- sh Setup.sh ---" + Ansi.NoBold + Ansi.Reset );
+		// Via sh, not ./. : Setup.sh is stored without the exec bit upstream.
+		var setupCode = RunProcess( "sh", new[] { "Setup.sh" }, repoRoot, emit );
+		emit( "" );
 
-		if ( !skipDeps )
+		if ( setupCode != 0 )
 		{
-			// --- fetch natives ------------------------------------------------
-			emit( Ansi.Bold + Ansi.Cyan + "--- fetching native binaries ---" + Ansi.NoBold + Ansi.Reset );
-			var fetchCode = RunSboxBuild( repoRoot, sboxBuildProj, new[] { "download-public-artifacts", "--native-only" }, emit );
-			if ( fetchCode != 0 )
-			{
-				emit( Ansi.Yellow + "  warning: download failed - checking whatever is already on disk" + Ansi.Reset );
-			}
-			emit( "" );
+			emit( Ansi.Red + $"  setup failed (exit {setupCode})" + Ansi.Reset );
+			emit( Ansi.Dim + "  Rerun with --verbose output: sh Setup.sh --verbose (in the checkout)." + Ansi.Reset );
+			return;
+		}
 
-			// --- check native deps --------------------------------------------
-			emit( Ansi.Bold + Ansi.Cyan + "--- checking native dependencies in game/bin/linuxsteamrt64 ---" + Ansi.NoBold + Ansi.Reset );
-			nativeDepsResult = CheckNativeDeps( repoRoot, emit );
+		emit( Ansi.Green + "  setup OK" + Ansi.Reset );
+		emit( "" );
+
+		if ( skipDeps )
+		{
+			emit( Ansi.Dim + "  --skip-deps: skipping the native dependency report" + Ansi.Reset );
+			emit( "" );
+		}
+		else
+		{
+			// --- native dependency report (ampersand's own check) --------------
+			emit( Ansi.Bold + Ansi.Cyan + "--- native dependencies in game/bin/linuxsteamrt64 ---" + Ansi.NoBold + Ansi.Reset );
+			var nativeDepsResult = CheckNativeDeps( repoRoot, emit );
 
 			if ( nativeDepsResult == 1 )
 			{
 				emit( "" );
-				emit( Ansi.Yellow + "  These are prebuilt binaries that cannot be rebuilt here, so the managed build" + Ansi.Reset );
-				emit( Ansi.Yellow + "  below will still succeed - but the editor will not run until they resolve." + Ansi.Reset );
-				emit( Ansi.Dim + "  Continuing anyway (non-interactive / -y)." + Ansi.Reset );
+				emit( Ansi.Yellow + "  Missing libraries above are prebuilt binaries that cannot be rebuilt here -" + Ansi.Reset );
+				emit( Ansi.Yellow + "  the build above still succeeded, but the editor will not run until they resolve." + Ansi.Reset );
 			}
 			emit( "" );
 		}
-		else
-		{
-			emit( Ansi.Dim + "  --skip-deps: not fetching or checking natives" + Ansi.Reset );
-			emit( "" );
-		}
 
-		// --- build ------------------------------------------------------------
-		emit( Ansi.Bold + Ansi.Cyan + "--- sboxbuild build --config Developer ---" + Ansi.NoBold + Ansi.Reset );
-		var buildCode = RunSboxBuild( repoRoot, sboxBuildProj, new[] { "build", "--config", "Developer" }, emit );
-		emit( "" );
-
-		if ( buildCode != 0 )
-		{
-			emit( Ansi.Red + $"  build failed (exit {buildCode})" + Ansi.Reset );
-			emit( "" );
-			emit( Ansi.Dim + "Native dependency issues above do not cause this - managed build failures are separate." + Ansi.Reset );
-			return;
-		}
-
-		emit( Ansi.Green + "  build OK" + Ansi.Reset );
-		emit( "" );
-
-		// --- build-shaders (best-effort) -------------------------------------
-		emit( Ansi.Bold + Ansi.Cyan + "--- sboxbuild build-shaders ---" + Ansi.NoBold + Ansi.Reset );
-		var shadersCode = RunSboxBuild( repoRoot, sboxBuildProj, new[] { "build-shaders" }, emit );
-		if ( shadersCode != 0 )
-			emit( Ansi.Yellow + "  warning: build-shaders failed (not supported on Linux yet), continuing" + Ansi.Reset );
-		else
-			emit( Ansi.Green + "  build-shaders OK" + Ansi.Reset );
-		emit( "" );
-
-		// --- build-content (best-effort) -------------------------------------
-		emit( Ansi.Bold + Ansi.Cyan + "--- sboxbuild build-content ---" + Ansi.NoBold + Ansi.Reset );
-		var contentCode = RunSboxBuild( repoRoot, sboxBuildProj, new[] { "build-content" }, emit );
-		if ( contentCode != 0 )
-			emit( Ansi.Yellow + "  warning: build-content failed (not supported on Linux yet), continuing" + Ansi.Reset );
-		else
-			emit( Ansi.Green + "  build-content OK" + Ansi.Reset );
-		emit( "" );
-
-		emit( Ansi.Bold + Ansi.White + "=== bootstrap done ===" + Ansi.NoBold + Ansi.Reset );
-		if ( nativeDepsResult == 1 )
-			emit( Ansi.Yellow + "  (with missing native libraries - editor will not run until they resolve)" + Ansi.Reset );
-	}
-
-	private static int RunSboxBuild( string repoRoot, string proj, string[] sboxArgs, Action<string> emit )
-	{
-		var argv = new List<string> { "run", "--project", proj, "--" };
-		argv.AddRange( sboxArgs );
-		return RunProcess( "dotnet", argv, repoRoot, emit );
+		emit( Ansi.Bold + Ansi.White + "=== build done ===" + Ansi.NoBold + Ansi.Reset );
 	}
 
 	private static int RunProcess( string exe, IReadOnlyList<string> args, string workDir, Action<string> emit )
@@ -157,7 +117,7 @@ internal static class Bootstrap
 
 	private static string Quote( string s ) => s.Contains( ' ' ) ? "\"" + s + "\"" : s;
 
-	// ---- native dependency check (port of bootstrap.sh check_native_deps) ----
+	// ---- native dependency report (kept; Setup.sh has no per-binary report) ----
 
 	/// <summary>
 	/// Returns 0 when everything resolves, 1 when something is missing, 2 when the
@@ -175,7 +135,7 @@ internal static class Bootstrap
 
 		if ( !Directory.Exists( binDir ) )
 		{
-			emit( Ansi.Yellow + $"  skipped: {binDir} does not exist - the fetch above did not produce it" + Ansi.Reset );
+			emit( Ansi.Yellow + $"  skipped: {binDir} does not exist - setup should have produced it" + Ansi.Reset );
 			return 2;
 		}
 

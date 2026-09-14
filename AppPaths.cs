@@ -67,4 +67,33 @@ internal static class AppPaths
 		var path = Path.Combine( dir, fileName );
 		return File.Exists( path ) ? path : null;
 	}
+
+	/// <summary>
+	/// Writable cache for ampersand-owned build outputs (same XDG layout as
+	/// RunLog/SniperCompat): ~/.cache/sbox-ampersand/.
+	/// </summary>
+	public static string CacheDir
+	{
+		get
+		{
+			var cacheHome = Environment.GetEnvironmentVariable( "XDG_CACHE_HOME" );
+			if ( string.IsNullOrEmpty( cacheHome ) )
+				cacheHome = Path.Combine( Environment.GetFolderPath( Environment.SpecialFolder.UserProfile ), ".cache" );
+			return Path.Combine( cacheHome, "sbox-ampersand" );
+		}
+	}
+
+	/// <summary>
+	/// Default location of the built SDL embed-fix library. It lives in the
+	/// cache (not the engine checkout) because the engine no longer ships the
+	/// shim source; ampersand vendors it under apps/patches/ and builds it on
+	/// demand. Overridable with SBOX_SDLWINFIX_SO.
+	/// </summary>
+	public static string SdlWinFixLibrary => Path.Combine( CacheDir, "libsdlwinfix.so" );
+
+	/// <summary>
+	/// The vendored SDL embed-fix source (apps/patches/sdlwinfix.c, shipped to
+	/// scripts/patches/ at build time), or null if this install lacks it.
+	/// </summary>
+	public static string? FindSdlWinFixSource() => FindScript( Path.Combine( "patches", "sdlwinfix.c" ) );
 }

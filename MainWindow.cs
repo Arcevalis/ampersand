@@ -199,8 +199,8 @@ internal sealed class MainWindow : Window
 
 		// TRANSIENT stopgap toggle for the Linux/XWayland SDL embedding gap
 		// (frozen play-viewport size, offset menu clicks). Global, persisted in
-		// settings.json, takes effect on the next launch. Delete with
-		// sdlwinfix.c once Facepunch fixes it natively.
+		// settings.json, takes effect on the next launch. Delete apps/patches/
+		// with the toggle once Facepunch fixes it natively.
 		sdlWinFix = new CheckBox
 		{
 			Content = "SDL embed fix (Linux)",
@@ -316,7 +316,7 @@ internal sealed class MainWindow : Window
 
 		bootstrapButton = SidebarButton( "Build S&Box" );
 		bootstrapButton.Click += ( _, _ ) => RunBootstrap( skipDeps: false );
-		ToolTip.SetTip( bootstrapButton, "Fetch natives, check dependencies, then build - port of sbox-public/bootstrap.sh" );
+		ToolTip.SetTip( bootstrapButton, "Run the engine Setup.sh, then an ldd dependency report" );
 
 		logFolderButton = SidebarButton( "Open log folder" );
 		logFolderButton.Click += ( _, _ ) => OpenLogFolder();
@@ -798,8 +798,9 @@ internal sealed class MainWindow : Window
 		return true;
 	}
 
-	/// The SDL embed fix needs its helper library built (bootstrap-linux/patches/
-	/// libsdlwinfix.so). The launch scripts hard-fail when the fix is enabled but
+	/// The SDL embed fix needs its helper library built (vendored source at
+	/// apps/patches/sdlwinfix.c, built .so in the ampersand cache dir - see
+	/// AppPaths). The launch scripts hard-fail when the fix is enabled but
 	/// the library is missing, so offer to build it here with a modal instead of
 	/// failing later inside the terminal. Only the game/editor scripts consume
 	/// _common.sh; sbox-server.sh is standalone and never touches the shim.
@@ -809,16 +810,15 @@ internal sealed class MainWindow : Window
 		if ( sdlWinFix.IsChecked != true || target.ScriptFile == "sbox-server.sh" )
 			return true;
 
-		var dir = Path.Combine( root, "bootstrap-linux", "patches" );
 		var so = Environment.GetEnvironmentVariable( "SBOX_SDLWINFIX_SO" );
 		if ( string.IsNullOrWhiteSpace( so ) )
-			so = Path.Combine( dir, "libsdlwinfix.so" );
+			so = AppPaths.SdlWinFixLibrary;
 		if ( File.Exists( so ) )
 			return true;
 
 		var build = await ConfirmDialog.Show( this, "SDL embed fix shim missing",
 			"The SDL embed fix is enabled, but its helper library has not been built yet:\n"
-				+ so + "\n\nBuild it now? This runs gcc in bootstrap-linux/patches/ and takes a few seconds.",
+				+ so + "\n\nBuild it now? This compiles the vendored shim (apps/patches/sdlwinfix.c) with gcc and takes a few seconds.",
 			"Build it", "Cancel launch" );
 		if ( !build )
 		{
@@ -827,17 +827,21 @@ internal sealed class MainWindow : Window
 			return false;
 		}
 
-		var src = Path.Combine( dir, "sdlwinfix.c" );
-		if ( !File.Exists( src ) )
+		var src = AppPaths.FindSdlWinFixSource();
+		if ( src is null )
 		{
 			await Fail( target, "Shim source missing",
-				"Expected the shim source at:\n" + src + "\n\nUpdate the sbox checkout, or untick the SDL embed fix." );
+				"Expected the vendored shim source at scripts/patches/sdlwinfix.c next to the built app.\n\nReinstall ampersand, or untick the SDL embed fix." );
 			return false;
 		}
+
+		try { Directory.CreateDirectory( Path.GetDirectoryName( so )! ); } catch { }
 
 		statusText.Text = target.Name + ": building sdlwinfix shim...";
 		UpdateStatusBar();
 
+		var srcDir = Path.GetDirectoryName( src )!;
+		var srcFile = Path.GetFileName( src );
 		var (exit, output) = await Task.Run( () =>
 		{
 			using var proc = new Process
@@ -845,13 +849,13 @@ internal sealed class MainWindow : Window
 				StartInfo = new ProcessStartInfo
 				{
 					FileName = "gcc",
-					WorkingDirectory = dir,
+					WorkingDirectory = srcDir,
 					UseShellExecute = false,
 					RedirectStandardOutput = true,
 					RedirectStandardError = true
 				}
 			};
-			foreach ( var arg in new[] { "-D_GNU_SOURCE", "-shared", "-fPIC", "-O1", "-o", so, "sdlwinfix.c", "-ldl", "-lX11" } )
+			foreach ( var arg in new[] { "-D_GNU_SOURCE", "-shared", "-fPIC", "-O1", "-o", so, srcFile, "-ldl", "-lX11" } )
 				proc.StartInfo.ArgumentList.Add( arg );
 			try
 			{

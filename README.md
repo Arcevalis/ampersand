@@ -29,10 +29,8 @@ It can:
 - **Check dependencies** on the host *and* inside the container, where the
   missing sets are different (notably `libunwind` and OpenSSL 3, which sniper
   doesn't ship. Ampersand keeps a compat cache for those).
-- **Build s&amp;box** from source: fetch prebuilt natives, `ldd`-sweep them,
-  then drive `SboxBuild` through `build` / `build-shaders` / `build-content`,
-  a port of `sbox-public/bootstrap.sh` that runs in a real terminal with
-  colour.
+- **Build s&amp;box** from source: run the engine's `Setup.sh`, then an
+  `ldd` report over the natives, in a real terminal with colour.
 - Remember your **s&amp;box checkout location** and your **server game**
   (package ident like `fss.bloodsigil` or a path to a `.sbproj`).
 
@@ -192,10 +190,10 @@ Ampersand passes it as `+game <value>`. Empty clears it.
 
 ### Tools (sidebar)
 
-- **Build S&Box**: fetch natives → `ldd` dependency sweep → `SboxBuild
-  build --config Developer` → best-effort `build-shaders` / `build-content`.
-  Runs in your terminal via `ampersand --bootstrap` (`--skip-deps` available
-  on the CLI).
+- **Build S&Box**: runs the engine's `Setup.sh` (git hooks, per-platform
+  artifacts, bindings, managed, shaders, content), then Ampersand's own `ldd`
+  dependency report over `game/bin/linuxsteamrt64`. Runs in your terminal via
+  `ampersand --bootstrap` (`--skip-deps` skips the report on the CLI).
 - **Check for missing dependencies**: `ldd` sweep of
   `game/bin/linuxsteamrt64` plus the engine's bundled .NET runtime, on the
   **host and inside sniper**, plus the sniper compat cache status. Runs via
@@ -211,7 +209,7 @@ binary inside your terminal emulator to keep SGR colour and column alignment:
 
 ```sh
 ampersand --dependency-check          # coloured host + container sweep
-ampersand --bootstrap [--skip-deps]   # full engine build
+ampersand --bootstrap [--skip-deps]   # engine Setup.sh + ldd report
 ```
 
 ## How it works
@@ -245,11 +243,12 @@ SystemTerminal.cs       # emulator detection + per-emulator --wait flags
 SniperRuntime.cs        # find + validate the Steam Linux Runtime install
 SniperCompat.cs         # libunwind / OpenSSL 3 shim cache for the container
 SteamLauncherService.cs # container entry through Steam's launcher service
-Bootstrap.cs            # Build S&Box port (fetch → ldd → SboxBuild)
+Bootstrap.cs            # Build S&Box: engine Setup.sh + ldd report
 DependencyCheck.cs      # host + container ldd sweep + shim report
 SboxSettings.cs         # persisted s&box path + server game (~/.local/share/…)
 RepoRoot.cs / AppPaths.cs / RunLog.cs / Ansi.cs / TerminalTheme.cs …
 apps/                   # launch scripts (sbox.sh, sbox-dev.sh, sbox-server.sh, build.sh, _common.sh)
+apps/patches/           # vendored SDL embed-fix source (sdlwinfix.c; built to the ampersand cache dir on demand)
 assets/                 # ampersand.desktop, AppRun, ampersand.png (logo)
 install-appimage.sh       # publish → AppDir → AppImage → install
 uninstall.sh              # remove an install (AppImage, entry, icon, menu pin)
@@ -265,7 +264,7 @@ bootstrap.sh            # dev build shortcut (dotnet build -c Release)
 | `Steam is not running` | Container entry goes through Steam's launcher service. Start the client first. |
 | `HRESULT: 0x80008088` / `TypeInitializationException in Interop.Crypto` | Missing `libunwind`/OpenSSL 3 inside sniper. Run **Check for missing dependencies** and do one containerised launch to seed the shim cache. |
 | `No terminal emulator found` | Install one (`gnome-terminal`, `konsole`, `alacritty`, `kitty`, `foot`, `xterm`), or untick *Launch with system terminal* to run headless with log capture. |
-| `_exe not found (run ./bootstrap.sh first)` | The engine isn't built yet. Use **Build S&Box**. |
+| `_exe not found (run Build S&Box first)` | The engine isn't built yet. Use **Build S&Box**. |
 | AppImage won't run (`fuse` errors) | Install `fuse2`/`libfuse2`, or extract once: `./Ampersand-x86_64.AppImage --appimage-extract` and run `squashfs-root/AppRun`. |
 | Rebuild fails with `Text file busy` | The target AppImage is still running. Quit it and run `install-appimage.sh` again (the script checks for this first). |
 | Menu entry missing after editing the menu | KDE Menu Editor can write a root `<Exclude>` for `Ampersand.desktop` into `~/.config/menus/applications-kmenuedit.menu`, which hides it everywhere. The install step removes that block, pins the entry in Development and rebuilds the menu cache (backup at `applications-kmenuedit.menu.bak`). |
