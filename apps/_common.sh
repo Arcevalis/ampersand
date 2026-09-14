@@ -64,6 +64,36 @@ sbox_exec()
 	LD_LIBRARY_PATH="$NATIVE_DIR${SBOX_SNIPER_COMPAT:+:$SBOX_SNIPER_COMPAT}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 	export LD_PRELOAD LD_LIBRARY_PATH
 
+	# TRANSIENT stopgap for the Linux/XWayland foreign-window embedding gap
+	# (Qt never forwards geometry to the embedded SDL window, so SDL's
+	# size/position answers fossilize - bootstrap-linux/patches/sdlwinfix.c).
+	# Remove this block + the two shim files once Facepunch fixes it natively.
+	# Opt-in only: SBOX_SDLWINFIX=observe (log topology, fake nothing) or =1
+	# (report live parent-widget geometry). Default off. Kill switch: =0.
+	# The .so is built on demand and NOT rebuilt here; a missing file when
+	# enabled is a hard error so a silent no-op never masquerades as a fix.
+	# The log defaults to game/logs/sdlwinfix.log (truncated here each run,
+	# the shim only appends); override with SDLWINFIX_LOG. The shim goes
+	# after HarfBuzz in LD_PRELOAD - HarfBuzz-first ordering is required
+	# (see above). Note: only --env allowlisted variables cross into the
+	# Steam runtime container, so use host-side runs for trials.
+	if [ "${SBOX_SDLWINFIX:-0}" != "0" ]; then
+		_sdlwinfix_so="${SBOX_SDLWINFIX_SO:-$ROOT/bootstrap-linux/patches/libsdlwinfix.so}"
+		if [ ! -f "$_sdlwinfix_so" ]; then
+			echo "error: SBOX_SDLWINFIX=$SBOX_SDLWINFIX but fix shim missing at $_sdlwinfix_so" >&2
+			echo "build it: gcc -D_GNU_SOURCE -shared -fPIC -O1 -o libsdlwinfix.so sdlwinfix.c -ldl -lX11 (in bootstrap-linux/patches/)" >&2
+			exit 1
+		fi
+		if [ -z "${SDLWINFIX_LOG:-}" ]; then
+			SDLWINFIX_LOG="$GAME_DIR/logs/sdlwinfix.log"
+			export SDLWINFIX_LOG
+			mkdir -p "$GAME_DIR/logs"
+			: > "$SDLWINFIX_LOG"
+		fi
+		LD_PRELOAD="$LD_PRELOAD:$_sdlwinfix_so"
+		export LD_PRELOAD
+	fi
+
 	# Wayland's Qt platform plugin is not shipped/unstable; force X11 (xcb)
 	# via XWayland (only xcb is bundled - "Available platform plugins are: xcb").
 	QT_QPA_PLATFORM=xcb

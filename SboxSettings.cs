@@ -4,7 +4,7 @@ using System.Text.Json;
 
 namespace Ampersand;
 
-internal sealed record SboxConfig( string SboxRoot, string? SboxServerGame = null );
+internal sealed record SboxConfig( string SboxRoot, string? SboxServerGame = null, bool SdlWinFix = false );
 
 internal static class SboxSettings
 {
@@ -132,16 +132,27 @@ internal static class SboxSettings
 				root = "";
 			}
 
-			// Optional: game ident (fss.bloodsigil) or path to .sbproj for sbox-server
-			string? serverGame = null;
-			if ( doc.RootElement.TryGetProperty( "sboxServerGame", out var sg ) || doc.RootElement.TryGetProperty( "SboxServerGame", out sg ) )
-			{
-				var sgRaw = sg.GetString();
-				if ( !string.IsNullOrWhiteSpace( sgRaw ) )
-					serverGame = NormalizeServerGame( sgRaw );
-			}
+		// Optional: game ident (fss.bloodsigil) or path to .sbproj for sbox-server
+		string? serverGame = null;
+		if ( doc.RootElement.TryGetProperty( "sboxServerGame", out var sg ) || doc.RootElement.TryGetProperty( "SboxServerGame", out sg ) )
+		{
+			var sgRaw = sg.GetString();
+			if ( !string.IsNullOrWhiteSpace( sgRaw ) )
+				serverGame = NormalizeServerGame( sgRaw );
+		}
 
-			return new SboxConfig( root, serverGame );
+		// Optional: TRANSIENT stopgap toggle for the Linux/XWayland SDL
+		// embedding gap (sdlwinfix.c). Delete with the shim once Facepunch
+		// fixes it natively. Absent key = off.
+		var sdlWinFix = false;
+		if ( doc.RootElement.TryGetProperty( "sdlWinFix", out var swf ) || doc.RootElement.TryGetProperty( "SdlWinFix", out swf ) )
+		{
+			if ( swf.ValueKind == JsonValueKind.True ) sdlWinFix = true;
+			else if ( swf.ValueKind == JsonValueKind.String )
+				sdlWinFix = swf.GetString() is string s && ( s == "1" || s.Equals( "true", StringComparison.OrdinalIgnoreCase ) );
+		}
+
+		return new SboxConfig( root, serverGame, sdlWinFix );
 		}
 		catch { return null; }
 	}
@@ -215,6 +226,23 @@ internal static class SboxSettings
 		return Load()?.SboxServerGame;
 	}
 
+	public static bool GetSdlWinFix()
+	{
+		try { return Load()?.SdlWinFix == true; } catch { return false; }
+	}
+
+	public static void SaveSdlWinFix( bool enabled )
+	{
+		var existing = Load();
+		var root = existing?.SboxRoot ?? Resolve() ?? GetStalePersistedPath() ?? "";
+		if ( string.IsNullOrWhiteSpace( root ) )
+		{
+			var detected = RepoRoot.Find();
+			if ( detected is not null ) root = detected;
+		}
+		Save( root, existing?.SboxServerGame, enabled );
+	}
+
 	public static void SaveServerGame( string? serverGame )
 	{
 		var existing = Load();
@@ -232,23 +260,29 @@ internal static class SboxSettings
 
 	public static void Save( string sboxRoot )
 	{
-		// Preserve existing serverGame when only root is being saved (e.g. Resolve migration).
-		var existingGame = Load()?.SboxServerGame;
-		Save( sboxRoot, existingGame );
+		// Preserve existing serverGame and sdlWinFix when only root is being saved (e.g. Resolve migration).
+		var existing = Load();
+		Save( sboxRoot, existing?.SboxServerGame, existing?.SdlWinFix );
 	}
 
 	public static void Save( string sboxRoot, string? serverGame )
 	{
+		Save( sboxRoot, serverGame, Load()?.SdlWinFix );
+	}
+
+	public static void Save( string sboxRoot, string? serverGame, bool? sdlWinFix )
+	{
 		var norm = Normalize( sboxRoot ) ?? sboxRoot;
 		var normGame = NormalizeServerGame( serverGame );
+		var flag = sdlWinFix ?? Load()?.SdlWinFix ?? false;
 		var dir = ConfigDirectory;
 		Directory.CreateDirectory( dir );
 
 		string json;
 		if ( normGame is not null )
-			json = JsonSerializer.Serialize( new { sboxRoot = norm, sboxServerGame = normGame }, new JsonSerializerOptions { WriteIndented = true } );
+			json = JsonSerializer.Serialize( new { sboxRoot = norm, sboxServerGame = normGame, sdlWinFix = flag }, new JsonSerializerOptions { WriteIndented = true } );
 		else
-			json = JsonSerializer.Serialize( new { sboxRoot = norm }, new JsonSerializerOptions { WriteIndented = true } );
+			json = JsonSerializer.Serialize( new { sboxRoot = norm, sdlWinFix = flag }, new JsonSerializerOptions { WriteIndented = true } );
 
 		var tmp = ConfigPath + ".tmp";
 		File.WriteAllText( tmp, json );

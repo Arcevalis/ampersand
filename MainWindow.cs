@@ -35,6 +35,7 @@ internal sealed class MainWindow : Window
 	private readonly Border sboxServerGamePanel;
 	private readonly CheckBox steamRuntime;
 	private readonly CheckBox systemTerminal;
+	private readonly CheckBox sdlWinFix;
 
 	private LaunchTarget? selected;
 	private bool updatingCheckbox;
@@ -196,6 +197,31 @@ internal sealed class MainWindow : Window
 				selected.UseSystemTerminal = systemTerminal.IsChecked == true;
 		};
 
+		// TRANSIENT stopgap toggle for the Linux/XWayland SDL embedding gap
+		// (frozen play-viewport size, offset menu clicks). Global, persisted in
+		// settings.json, takes effect on the next launch. Delete with
+		// sdlwinfix.c once Facepunch fixes it natively.
+		sdlWinFix = new CheckBox
+		{
+			Content = "SDL embed fix (Linux)",
+			VerticalAlignment = VerticalAlignment.Center,
+			IsChecked = SboxSettings.GetSdlWinFix()
+		};
+		ToolTip.SetTip( sdlWinFix, "TRANSIENT stopgap until Facepunch fixes the native embedding.\n"
+			+ "Reports the live play-widget geometry to SDL (fixes fullscreen menu size\n"
+			+ "and offset clicks in editor play mode on Linux/XWayland).\n"
+			+ "Takes effect on next launch. Observe-only topology logging stays env-only:\n"
+			+ "SBOX_SDLWINFIX=observe." );
+		sdlWinFix.IsCheckedChanged += async ( _, _ ) =>
+		{
+			if ( updatingCheckbox ) return;
+			try { SboxSettings.SaveSdlWinFix( sdlWinFix.IsChecked == true ); }
+			catch ( Exception e )
+			{
+				await ConfirmDialog.Notify( this, "Could not save settings", e.Message + "\n\nPath: " + SboxSettings.ConfigPath );
+			}
+		};
+
 		var toggles = new StackPanel
 		{
 			Orientation = Orientation.Horizontal,
@@ -204,6 +230,7 @@ internal sealed class MainWindow : Window
 		};
 		toggles.Children.Add( systemTerminal );
 		toggles.Children.Add( steamRuntime );
+		toggles.Children.Add( sdlWinFix );
 
 		statusText = new TextBlock
 		{
@@ -600,6 +627,10 @@ internal sealed class MainWindow : Window
 			// _common.sh also hard-sets it for direct script runs.
 			["QT_QPA_PLATFORM"] = "xcb"
 		};
+		// TRANSIENT SDL embed fix (see sdlWinFix checkbox): persisted toggle,
+		// read live so it applies to this launch. Same --env crossing as above.
+		if ( sdlWinFix.IsChecked == true )
+			env["SBOX_SDLWINFIX"] = "1";
 		var command = new List<string>();
 
 		// Held across the await below, not just the spawn: PrepareSniper can sit
@@ -622,7 +653,14 @@ internal sealed class MainWindow : Window
 		}
 		finally
 		{
+			// Clearing the flag is not enough on its own: Preparing raises no
+			// change event, so without a notify every failed prepare (Steam
+			// not running, missing runtime, Start throwing) leaves the play
+			// button disabled after its dialog. Harmless on the success path,
+			// where Start fires its own state change right after.
 			target.Preparing = false;
+			target.NotifyStatusChanged();
+			UpdateStatusBar();
 		}
 
 		// Append sbox-server game argument (ident or .sbproj path) when launching the
