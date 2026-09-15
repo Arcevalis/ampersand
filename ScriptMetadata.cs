@@ -3,7 +3,7 @@ using System.IO;
 
 namespace Ampersand;
 
-internal enum SniperMode
+internal enum RuntimeMode
 {
 	Never,
 	Optional,
@@ -19,7 +19,7 @@ internal sealed class ScriptMetadata
 	private const int HeaderLines = 20;
 
 	public string? Name { get; private set; }
-	public SniperMode Sniper { get; private set; } = SniperMode.Optional;
+	public RuntimeMode Runtime { get; private set; } = RuntimeMode.Optional;
 
 	public static ScriptMetadata Read( string path )
 	{
@@ -60,12 +60,12 @@ internal sealed class ScriptMetadata
 					metadata.Name = value;
 					break;
 
-				case "sniper":
-					metadata.Sniper = value switch
+				case "runtime":
+					metadata.Runtime = value switch
 					{
-						"never" => SniperMode.Never,
-						"always" => SniperMode.Always,
-						_ => SniperMode.Optional
+						"never" => RuntimeMode.Never,
+						"always" => RuntimeMode.Always,
+						_ => RuntimeMode.Optional
 					};
 					break;
 			}

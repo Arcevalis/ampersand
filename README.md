@@ -16,7 +16,7 @@
 Ampersand is a small desktop launcher for running [s&amp;box](https://sbox.game)
 from source on Linux. The engine ships as prebuilt natives plus managed code,
 needs a handful of host libraries, and behaves best inside Valve's
-**Steam Linux Runtime 3.0 (sniper)** container. Ampersand wraps all of that
+**Steam Linux Runtime 4.0 (steamrt4)** container. Ampersand wraps all of that
 behind a single window with a ▶ button per target.
 
 It can:
@@ -27,8 +27,8 @@ It can:
 - **Launch inside the Steam Runtime** container (per-target toggle) so the
   engine sees the exact libraries it was built against.
 - **Check dependencies** on the host *and* inside the container, where the
-  missing sets are different (notably `libunwind` and OpenSSL 3, which sniper
-  doesn't ship. Ampersand keeps a compat cache for those).
+  missing sets are different (notably `libunwind`, which the container may
+  not ship. Ampersand keeps a compat cache for those).
 - **Build s&amp;box** from source: run the engine's `Setup.sh`, then an
   `ldd` report over the natives, in a real terminal with colour.
 - Remember your **s&amp;box checkout location** and your **server game**
@@ -46,7 +46,7 @@ spawns yours and gets out of the way.
 | Linux x86_64 | Primary target. Wayland works (Qt is forced to `xcb`/XWayland). |
 | s&amp;box source checkout | A folder containing `game/` + `engine/` with `game/sbox` built. |
 | .NET 10 SDK | Only to *build* Ampersand. Not needed to *run* the AppImage. |
-| Steam + Steam Linux Runtime 3.0 (sniper) | Only for containerised launches / container dependency sweep. Install via `steam steam://install/1628350`. Steam must be running. |
+| Steam + Steam Linux Runtime 4.0 (steamrt4) | Only for containerised launches / container dependency sweep. Install via `steam steam://install/4183110`. Steam must be running. |
 | A terminal emulator | `gnome-terminal`, `konsole`, `alacritty`, `kitty`, `foot`, `xterm`, … Launches open there so you get a real TTY (and the engine's own ANSI colour). |
 
 ## Quick start
@@ -175,9 +175,9 @@ emulators that fork can't always take the engine with them).
 
 Per-target toggles:
 
-- **Launch in Steam Runtime**: enter the sniper container via Steam's own
+- **Launch in Steam Runtime**: enter the steamrt4 container via Steam's own
   launcher service (Steam must be running). Forced on/off by the script's
-  `# ampersand: sniper=always|never` header where applicable.
+  `# ampersand: runtime=always|never` header where applicable.
 - **Launch with system terminal**: open your emulator for this run (default
   on; it's the only way to see engine output). Off runs headless with output
   captured to the log file.
@@ -196,7 +196,7 @@ Ampersand passes it as `+game <value>`. Empty clears it.
   `ampersand --bootstrap` (`--skip-deps` skips the report on the CLI).
 - **Check for missing dependencies**: `ldd` sweep of
   `game/bin/linuxsteamrt64` plus the engine's bundled .NET runtime, on the
-  **host and inside sniper**, plus the sniper compat cache status. Runs via
+  **host and inside steamrt4**, plus the steamrt4 compat cache status. Runs via
   `ampersand --dependency-check`. (Host-clean but container-broken is the
   classic trap. This checks both.)
 - **Open log folder**: every run is tee'd to `~/.cache/sbox-ampersand/logs/`
@@ -215,17 +215,19 @@ ampersand --bootstrap [--skip-deps]   # engine Setup.sh + ldd report
 ## How it works
 
 - **Scripts are data.** `apps/*.sh` carry `# ampersand: name=…` /
-  `# ampersand: sniper=…` headers (`ScriptMetadata.cs` reads them) and are
+  `# ampersand: runtime=…` headers (`ScriptMetadata.cs` reads them) and are
   copied to `<OutDir>/scripts/` at build time, or `usr/bin/scripts/` in the
   AppImage. They stay loose files so you can edit them and the next launch
   picks it up. `_common.sh` sets the HarfBuzz `LD_PRELOAD`, library paths and
   `QT_QPA_PLATFORM=xcb` workarounds; `sbox-server.sh` intentionally skips the
   desktop-UI workarounds.
 - **The container is entered through Steam.** `SteamLauncherService` +
-  `SniperRuntime` refuse to build a container command unless the Steam client
+  `SteamRt4Runtime` refuse to build a container command unless the Steam client
   is up, because only its launcher service may create the user namespace.
-  `SniperCompat` seeds `libunwind` + OpenSSL 3 from the host on first
-  containerised launch (`~/.cache/sbox-ampersand/sniper-compat`).
+  `SteamRt4Compat` seeds `libunwind` from the host on first
+  containerised launch, plus best-effort `libpcre2-16.so.0` for the editor's
+  Qt tools (steamrt4's platform omits it; a miss warns but never blocks).
+  Cache: `~/.cache/sbox-ampersand/steamrt4-compat`.
 - **Settings** live in
   `${XDG_DATA_HOME:-~/.local}/share/sbox-ampersand/settings.json`
   (`SboxSettings.cs`); stale paths are kept for display and re-prompted.
@@ -234,14 +236,14 @@ ampersand --bootstrap [--skip-deps]   # engine Setup.sh + ldd report
 
 ```
 ampersand.csproj        # net10.0 + Avalonia 12; copies apps/** → scripts/
-Program.cs              # entry: UI | --dependency-check | --bootstrap
+Program.cs              # entry: UI | --dependency-check | --bootstrap | --probe-distro
 App.cs / MainWindow.cs  # Avalonia app + entire window (sidebar, targets, status bar)
 LaunchTarget.cs         # one script row: script file, runner, toggles
 ScriptMetadata.cs       # "# ampersand: key=value" header parser
 ProcessRunner.cs        # terminal-emulator or background process spawning
 SystemTerminal.cs       # emulator detection + per-emulator --wait flags
-SniperRuntime.cs        # find + validate the Steam Linux Runtime install
-SniperCompat.cs         # libunwind / OpenSSL 3 shim cache for the container
+SteamRt4Runtime.cs      # find + validate the Steam Linux Runtime install
+SteamRt4Compat.cs       # libunwind + editor-only pcre2-16 shim cache for the container
 SteamLauncherService.cs # container entry through Steam's launcher service
 Bootstrap.cs            # Build S&Box: engine Setup.sh + ldd report
 DependencyCheck.cs      # host + container ldd sweep + shim report
@@ -260,9 +262,9 @@ bootstrap.sh            # dev build shortcut (dotnet build -c Release)
 | Symptom | Likely cause / fix |
 |---|---|
 | `Repo root not found` / stale-location warning | Pick a folder containing `game/` + `engine/` + `game/sbox`. The field accepts the root, `game/`, or the `game/sbox` file itself. |
-| `Steam Linux Runtime not installed` | `steam steam://install/1628350`, then start Steam and sign in. |
+| `Steam Linux Runtime not installed` | `steam steam://install/4183110`, then start Steam and sign in. |
 | `Steam is not running` | Container entry goes through Steam's launcher service. Start the client first. |
-| `HRESULT: 0x80008088` / `TypeInitializationException in Interop.Crypto` | Missing `libunwind`/OpenSSL 3 inside sniper. Run **Check for missing dependencies** and do one containerised launch to seed the shim cache. |
+| `HRESULT: 0x80008088` | Missing `libunwind` inside steamrt4. Run **Check for missing dependencies** and do one containerised launch to seed the shim cache. |
 | `No terminal emulator found` | Install one (`gnome-terminal`, `konsole`, `alacritty`, `kitty`, `foot`, `xterm`), or untick *Launch with system terminal* to run headless with log capture. |
 | `_exe not found (run Build S&Box first)` | The engine isn't built yet. Use **Build S&Box**. |
 | AppImage won't run (`fuse` errors) | Install `fuse2`/`libfuse2`, or extract once: `./Ampersand-x86_64.AppImage --appimage-extract` and run `squashfs-root/AppRun`. |

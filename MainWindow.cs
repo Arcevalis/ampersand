@@ -180,7 +180,7 @@ internal sealed class MainWindow : Window
 		steamRuntime.IsCheckedChanged += ( _, _ ) =>
 		{
 			if ( !updatingCheckbox && selected is not null )
-				selected.UseSniper = steamRuntime.IsChecked == true;
+				selected.UseRuntime = steamRuntime.IsChecked == true;
 		};
 
 		// Decided BEFORE launching, because the emulator has to wrap the command
@@ -490,20 +490,20 @@ internal sealed class MainWindow : Window
 	{
 		updatingCheckbox = true;
 
-		switch ( target.Metadata.Sniper )
+		switch ( target.Metadata.Runtime )
 		{
-			case SniperMode.Never:
+			case RuntimeMode.Never:
 				steamRuntime.IsChecked = false;
 				steamRuntime.IsEnabled = false;
 				break;
 
-			case SniperMode.Always:
+			case RuntimeMode.Always:
 				steamRuntime.IsChecked = true;
 				steamRuntime.IsEnabled = false;
 				break;
 
 			default:
-				steamRuntime.IsChecked = target.UseSniper;
+				steamRuntime.IsChecked = target.UseRuntime;
 				steamRuntime.IsEnabled = true;
 				break;
 		}
@@ -638,7 +638,7 @@ internal sealed class MainWindow : Window
 			env["SBOX_SDLWINFIX"] = "1";
 		var command = new List<string>();
 
-		// Held across the await below, not just the spawn: PrepareSniper can sit
+		// Held across the await below, not just the spawn: PrepareRuntime can sit
 		// for minutes waiting on Steam, and nothing else marks the target busy.
 		target.Preparing = true;
 		target.NotifyStatusChanged();
@@ -646,9 +646,9 @@ internal sealed class MainWindow : Window
 
 		try
 		{
-			if ( target.UseSniper )
+			if ( target.UseRuntime )
 			{
-				if ( !await PrepareSniper( target, root, script, command, env ) )
+				if ( !await PrepareRuntime( target, root, script, command, env ) )
 					return;
 			}
 			else
@@ -672,7 +672,7 @@ internal sealed class MainWindow : Window
 		// dedicated server. The engine expects "+game <ident|/path/to.sbproj>" as
 		// concommand arguments (see engine/Sandbox.GameInstance/GameInstanceDll.cs:872,
 		// ViewportTools.SpawnDedicatedServer). We store only the ident/path and add
-		// the "+game" switch here. Both host and sniper wrapper paths forward "$@" to sbox-server.
+		// the "+game" switch here. Both host and container wrapper paths forward "$@" to sbox-server.
 		if ( target.ScriptFile == "sbox-server.sh" )
 		{
 			var serverGame = GetSboxServerGame();
@@ -720,20 +720,20 @@ internal sealed class MainWindow : Window
 	/// that is the only context in which the runtime's own bwrap is allowed to
 	/// create a user namespace. See SteamLauncherService.
 	/// </summary>
-	private async Task<bool> PrepareSniper(
+	private async Task<bool> PrepareRuntime(
 		LaunchTarget target,
 		string root,
 		string script,
 		List<string> command,
 		Dictionary<string, string> env )
 	{
-		var install = SniperRuntime.Find();
+		var install = SteamRt4Runtime.Find();
 
 		if ( install is null )
 		{
 			await Fail( target, "Steam Linux Runtime not installed",
-				"Steam Linux Runtime 3.0 (sniper) is not installed.\n\n"
-					+ "Install it from Steam:  steam steam://install/" + SniperRuntime.SteamAppId );
+				"Steam Linux Runtime 4.0 (steamrt4) is not installed.\n\n"
+					+ "Install it from Steam:  steam steam://install/" + SteamRt4Runtime.SteamAppId );
 			return false;
 		}
 
@@ -754,7 +754,7 @@ internal sealed class MainWindow : Window
 
 		var requirements = await Task.Run( () =>
 		{
-			var met = SniperRuntime.CheckRequirements( install, out var found );
+			var met = SteamRt4Runtime.CheckRequirements( install, out var found );
 			return (Met: met, Problems: found);
 		} );
 
@@ -768,7 +768,7 @@ internal sealed class MainWindow : Window
 
 		var compat = await Task.Run( () =>
 		{
-			var ready = SniperCompat.Ensure( out var found );
+			var ready = SteamRt4Compat.Ensure( out var found );
 			return (Ready: ready, Problems: found);
 		} );
 
@@ -778,10 +778,24 @@ internal sealed class MainWindow : Window
 			return false;
 		}
 
-		var cache = SniperCompat.CacheDirectory;
+		// Editor-only shims (libpcre2-16 for Qt): seeded when the host has
+		// them, noted when it does not - but the game needs none of these, so
+		// a miss must never block the launch. The note is transient (the
+		// status line moves on to "running"); the durable explanation lives
+		// in the dependency check.
+		var extras = await Task.Run( () =>
+		{
+			var ok = SteamRt4Compat.EnsureBestEffort( out var notes );
+			return (Ok: ok, Notes: notes);
+		} );
 
-		env["SBOX_IN_SNIPER"] = "1";
-		env["SBOX_SNIPER_COMPAT"] = cache;
+		if ( !extras.Ok )
+			statusText.Text = target.Name + ": no Qt shim (" + string.Join( "; ", extras.Notes ) + ")";
+
+		var cache = SteamRt4Compat.CacheDirectory;
+
+		env["SBOX_IN_STEAMRT4"] = "1";
+		env["SBOX_STEAMRT4_COMPAT"] = cache;
 
 		// TERM is added here rather than left to the emulator: this one is set on
 		// launch-client's own environment, and the child does not inherit it. It
@@ -1109,7 +1123,7 @@ internal sealed class MainWindow : Window
 				continue;
 
 			target.Metadata = ScriptMetadata.Read( script );
-			target.UseSniper = target.Metadata.Sniper == SniperMode.Always;
+			target.UseRuntime = target.Metadata.Runtime == RuntimeMode.Always;
 		}
 	}
 

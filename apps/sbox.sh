@@ -2,7 +2,7 @@
 # Launch the s&box game client.
 #
 # ampersand: name=Client (sbox)
-# ampersand: sniper=optional
+# ampersand: runtime=optional
 
 set -eu
 

@@ -2,7 +2,7 @@
 # Launch the s&box dedicated server. Without a "game" argument it prints help.
 #
 # ampersand: name=Dedicated Server (sbox-server)
-# ampersand: sniper=optional
+# ampersand: runtime=optional
 #
 # The server has no desktop UI so it does NOT need the workarounds in
 # _common.sh (HarfBuzz LD_PRELOAD, QT_QPA_PLATFORM=xcb). It only needs the
@@ -35,12 +35,13 @@ if [ ! -x "$_exe" ]; then
 	exit 1
 fi
 
-# Only LD_LIBRARY_PATH is needed for the server. SBOX_SNIPER_COMPAT is set by
-# the launcher when running inside the Steam Runtime (see MainWindow/PrepareSniper)
-# and points at cached libunwind + OpenSSL 3 that sniper does not ship. It is
+# Only LD_LIBRARY_PATH is needed for the server. SBOX_STEAMRT4_COMPAT is set by
+# the launcher when running inside the Steam Runtime (see MainWindow/PrepareRuntime)
+# and points at cached libunwind (plus the editor-only pcre2-16 shim) that the
+# container may not ship. It is
 # appended here inside the container/scripts context rather than exported by the
 # launcher because LD_LIBRARY_PATH does not cross the pressure-vessel boundary.
-LD_LIBRARY_PATH="$NATIVE_DIR${SBOX_SNIPER_COMPAT:+:$SBOX_SNIPER_COMPAT}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+LD_LIBRARY_PATH="$NATIVE_DIR${SBOX_STEAMRT4_COMPAT:+:$SBOX_STEAMRT4_COMPAT}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 export LD_LIBRARY_PATH
 
 # Translate bare ident/path to "+game <value>" for convenience:

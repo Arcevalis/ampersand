@@ -17,6 +17,16 @@ internal static class Program
 	public const string DependencyCheckArgument = "--dependency-check";
 	public const string BootstrapArgument = "--bootstrap";
 
+	/// <summary>
+	/// Prints distro detection and the resulting install hints without touching
+	/// anything. Takes an optional os-release path so mappings for other
+	/// distros can be validated from fixture files - e.g.
+	/// ampersand --probe-distro /tmp/opencode/os-release-steamos
+	/// Note: only the os-release source is overridable; binary probes and the
+	/// ostree-booted marker always describe this machine.
+	/// </summary>
+	public const string ProbeDistroArgument = "--probe-distro";
+
 	[STAThread]
 	private static int Main( string[] args )
 	{
@@ -24,6 +34,8 @@ internal static class Program
 			return DependencyCheckMain();
 		if ( args.Length > 0 && args[0] == BootstrapArgument )
 			return BootstrapMain( args );
+		if ( args.Length > 0 && args[0] == ProbeDistroArgument )
+			return ProbeDistroMain( args );
 
 		return BuildAvaloniaApp().StartWithClassicDesktopLifetime( args );
 	}
@@ -68,6 +80,33 @@ internal static class Program
 		Console.WriteLine();
 		Console.Write( "Press Enter to close." );
 		Console.ReadLine();
+
+		return 0;
+	}
+
+	private static int ProbeDistroMain( string[] args )
+	{
+		var distro = args.Length > 1
+			? SteamRt4Compat.DetectDistro( args[1] )
+			: SteamRt4Compat.DetectDistro();
+
+		Console.WriteLine( "family:     " + distro.Family );
+		Console.WriteLine( "manager:    " + distro.Manager );
+		Console.WriteLine( "escalation: " +
+			( distro.Escalation == "" ? ( distro.IsRoot ? "(running as root)" : "(none found)" )
+				: "'" + distro.Escalation.Trim() + "'" ) );
+		Console.WriteLine( "atomic:     " + ( distro.Atomic ? "yes" : "no" ) );
+
+		if ( distro.Caveat != "" )
+			Console.WriteLine( "caveat:    " + distro.Caveat.Trim() );
+
+		foreach ( var library in SteamRt4Compat.RequiredLibraries )
+			Console.WriteLine( "required " + library + " -> " + distro.FormatInstall(
+				SteamRt4Compat.PackageFor( distro.Family, library ) ) );
+
+		foreach ( var library in SteamRt4Compat.BestEffortLibraries )
+			Console.WriteLine( "optional " + library + " -> " + distro.FormatInstall(
+				SteamRt4Compat.PackageFor( distro.Family, library ) ) );
 
 		return 0;
 	}

@@ -8,7 +8,7 @@ namespace Ampersand;
 /// Runs a command under the Steam client's own AppArmor profile, by handing it to
 /// the launcher service pressure-vessel keeps running alongside Steam.
 ///
-/// This is the ONLY way ampersand enters the container. Spawning run-in-sniper
+/// This is the ONLY way ampersand enters the container. Spawning run-in-steamrt4
 /// straight off the filesystem does not work on Ubuntu 24.04+, and fails in a way
 /// that misreports its own cause: with
 /// kernel.apparmor_restrict_unprivileged_userns=1 the kernel exempts exactly two
@@ -17,7 +17,7 @@ namespace Ampersand;
 /// uid_map, and falls back to /usr/bin/bwrap - whose profile stacks every child
 /// into unpriv_bwrap with no CAP_SYS_ADMIN. The nested srt-bwrap then dies with
 /// "No permissions to create a new namespace", blaming kernel switches that are
-/// fine. See docs/sniper-userns-apparmor.md.
+/// fine. See docs/steamrt4-userns-apparmor.md.
 ///
 /// Sent through this service the command runs as a child of Steam, whose profile
 /// is flags=(unconfined) and grants userns to its whole tree, so srt-bwrap
@@ -39,7 +39,7 @@ internal static class SteamLauncherService
 	/// is not, because the client can be running while the service is not (an old
 	/// Steam build, or one still starting).
 	/// </summary>
-	public static bool IsAvailable( SniperInstall install )
+	public static bool IsAvailable( SteamRt4Install install )
 	{
 		if ( !File.Exists( install.LaunchClient ) )
 			return false;
@@ -66,7 +66,7 @@ internal static class SteamLauncherService
 	/// would fail silently, which is why this takes the dictionary rather than
 	/// reading Environment itself.
 	///
-	/// Inheriting Steam's environment is correct, not a compromise: run-in-sniper
+	/// Inheriting Steam's environment is correct, not a compromise: run-in-steamrt4
 	/// goes through pressure-vessel-unruntime, which strips Steam's LD_LIBRARY_PATH,
 	/// LD_PRELOAD and PATH back off before pressure-vessel-wrap. That is the same
 	/// path Steam itself takes to launch a game.
@@ -75,7 +75,7 @@ internal static class SteamLauncherService
 	/// the child.
 	/// </summary>
 	public static List<string> Wrap(
-		SniperInstall install,
+		SteamRt4Install install,
 		IReadOnlyList<string> command,
 		string workingDirectory,
 		IReadOnlyDictionary<string, string> environment )

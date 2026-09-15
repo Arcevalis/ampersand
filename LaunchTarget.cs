@@ -21,7 +21,7 @@ internal sealed class LaunchTarget : INotifyPropertyChanged
 	public ScriptMetadata Metadata { get; set; } = new();
 
 	/// <summary>Per-target checkbox state. Persisted in step 6.</summary>
-	public bool UseSniper { get; set; }
+	public bool UseRuntime { get; set; }
 
 	/// <summary>
 	/// Per-target: open the user's terminal emulator for this run. Default on,

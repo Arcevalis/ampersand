@@ -16,18 +16,20 @@
 #                scope.
 #
 #                Required on the host AND inside the Steam runtime, which ships
-#                its own libharfbuzz.so.0 2.7.4 - the container changes which
+#                its own libharfbuzz.so.0 - the container changes which
 #                system HarfBuzz you collide with, not whether you collide.
 #
 #   cwd          the engine resolves content paths relative to the working
 #                directory.
 #
-#   SBOX_SNIPER_COMPAT is set by the launcher only when running inside the
-#                Steam runtime, pointing at cached copies of the libunwind and
-#                OpenSSL 3 libraries sniper does not ship. Ordinary environment
-#                variables cross the container boundary but LD_LIBRARY_PATH
-#                does not, which is why it is appended here - inside - rather
-#                than exported by the launcher.
+#   SBOX_STEAMRT4_COMPAT is set by the launcher only when running inside the
+#                Steam runtime, pointing at cached copies of the libunwind
+#                libraries the container may not ship, plus the editor-only
+#                libpcre2-16.so.0 that steamrt4's platform omits (steamrt4
+#                brings its own OpenSSL 3, so that is never shimmed).
+#                Ordinary environment variables cross the container boundary
+#                but LD_LIBRARY_PATH does not, which is why it is appended
+#                here - inside - rather than exported by the launcher.
 
 set -eu
 
@@ -61,7 +63,7 @@ sbox_exec()
 	fi
 
 	LD_PRELOAD="$_harfbuzz${LD_PRELOAD:+:$LD_PRELOAD}"
-	LD_LIBRARY_PATH="$NATIVE_DIR${SBOX_SNIPER_COMPAT:+:$SBOX_SNIPER_COMPAT}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+	LD_LIBRARY_PATH="$NATIVE_DIR${SBOX_STEAMRT4_COMPAT:+:$SBOX_STEAMRT4_COMPAT}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 	export LD_PRELOAD LD_LIBRARY_PATH
 
 	# TRANSIENT stopgap for the Linux/XWayland foreign-window embedding gap

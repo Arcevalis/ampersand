@@ -11,10 +11,13 @@ namespace Ampersand;
 /// Steam runtime, because the two are different sets.
 ///
 /// Checking only the host is a trap: every binary in game/bin/linuxsteamrt64
-/// resolves cleanly inside sniper with nothing missing, while the libraries
-/// that actually stop the engine booting - libunwind and OpenSSL 3, needed by
-/// the .NET runtime - are missing from the CONTAINER. A host-only check reports
-/// all-clear on a setup that cannot start.
+/// resolves cleanly inside steamrt4 with nothing missing, while the libraries
+/// that actually stop the engine booting - libunwind, needed by the .NET
+/// runtime - may be missing from the CONTAINER. A host-only check reports
+/// all-clear on a setup that cannot start. (steamrt4 ships OpenSSL 3 natively,
+/// so the sniper-era OpenSSL shims are gone. Qt's libpcre2-16.so.0 is missing
+/// from the platform too - ampersand shims it from the host at launch until
+/// the engine ships it.)
 /// </summary>
 internal static class DependencyCheck
 {
@@ -25,12 +28,13 @@ internal static class DependencyCheck
 	private const string SweepScript = """
 		# Mirror _common.sh: the shim cache must join the path INSIDE the
 		# container, because LD_LIBRARY_PATH set outside is discarded by
-		# pressure-vessel. Without this the sweep reports what sniper lacks
+		# pressure-vessel. Without this the sweep reports what steamrt4 lacks
 		# natively rather than what a real launch actually sees.
-		LD_LIBRARY_PATH="$SBOX_NATIVE${SBOX_SNIPER_COMPAT:+:$SBOX_SNIPER_COMPAT}"
+		LD_LIBRARY_PATH="$SBOX_NATIVE${SBOX_STEAMRT4_COMPAT:+:$SBOX_STEAMRT4_COMPAT}"
 		export LD_LIBRARY_PATH
 		total=0
 		bad=0
+		sigs=""
 		for dir in "$SBOX_NATIVE" "$SBOX_DOTNET"; do
 			[ -d "$dir" ] || continue
 			for f in "$dir"/*; do
@@ -41,6 +45,16 @@ internal static class DependencyCheck
 				total=$(( total + 1 ))
 				miss=$( printf '%s\n' "$out" | awk '/not found/ { printf "%s ", $1 }' )
 				if [ -n "$miss" ]; then
+					# The tree ships versioned copies as distinct files
+					# (libQt5Core.so, .so.5, .so.5.15, .so.5.15.2 are four
+					# identical 83MB regular files, not symlinks). Report each
+					# unique content once.
+					sig="$f"
+					if command -v md5sum >/dev/null 2>&1; then
+						sig=$( md5sum < "$f" 2>/dev/null ) || sig="$f"
+					fi
+					case "$sigs" in *"|$sig|"*) continue;; esac
+					sigs="$sigs|$sig|"
 					bad=$(( bad + 1 ))
 					echo "MISS|$( basename "$f" )|$miss"
 				fi
@@ -68,7 +82,7 @@ internal static class DependencyCheck
 		{
 			["SBOX_NATIVE"] = native,
 			["SBOX_DOTNET"] = dotnet ?? string.Empty,
-			["SBOX_SNIPER_COMPAT"] = string.Empty
+			["SBOX_STEAMRT4_COMPAT"] = string.Empty
 		};
 
 		// --- host ---------------------------------------------------------
@@ -77,13 +91,13 @@ internal static class DependencyCheck
 		emit( "" );
 
 		// --- container ----------------------------------------------------
-		emit( Ansi.Bold + Ansi.Cyan + "--- steam runtime (sniper) ---" + Ansi.NoBold + Ansi.Reset );
+		emit( Ansi.Bold + Ansi.Cyan + "--- steam runtime (steamrt4) ---" + Ansi.NoBold + Ansi.Reset );
 
-		var install = SniperRuntime.Find();
+		var install = SteamRt4Runtime.Find();
 		if ( install is null )
 		{
-			emit( Ansi.Red + "  sniper is not installed" + Ansi.Reset
-				+ " - steam steam://install/" + SniperRuntime.SteamAppId );
+			emit( Ansi.Red + "  steamrt4 is not installed" + Ansi.Reset
+				+ " - steam steam://install/" + SteamRt4Runtime.SteamAppId );
 			emit( "" );
 			ReportShimCache( emit );
 			return;
@@ -108,7 +122,7 @@ internal static class DependencyCheck
 
 		emit( Ansi.Green + "  steam launcher service up" + Ansi.Reset );
 
-		if ( !SniperRuntime.CheckRequirements( install, out var problems ) )
+		if ( !SteamRt4Runtime.CheckRequirements( install, out var problems ) )
 		{
 			emit( Ansi.Red + "  this host cannot start a container:" + Ansi.Reset );
 
@@ -122,16 +136,16 @@ internal static class DependencyCheck
 
 		emit( Ansi.Green + "  requirements OK" + Ansi.Reset );
 
-		var cache = SniperCompat.CacheDirectory;
-		env["SBOX_SNIPER_COMPAT"] = cache;
+		var cache = SteamRt4Compat.CacheDirectory;
+		env["SBOX_STEAMRT4_COMPAT"] = cache;
 
-		var sniperCommand = SteamLauncherService.Wrap(
+		var runtimeCommand = SteamLauncherService.Wrap(
 			install,
 			new List<string> { install.RunScript, "--filesystem=" + cache, "--" }.Concat( sweep ).ToList(),
 			repoRoot,
 			env );
 
-		ReportSweep( sniperCommand, env, emit );
+		ReportSweep( runtimeCommand, env, emit );
 		emit( "" );
 		ReportShimCache( emit );
 	}
@@ -181,6 +195,10 @@ internal static class DependencyCheck
 		}
 
 		var found = false;
+		var errors = 0;
+		var advisories = 0;
+		var total = "?";
+		var pcre2 = new List<string>();
 
 		foreach ( var line in output.Split( '\n' ) )
 		{
@@ -189,36 +207,145 @@ internal static class DependencyCheck
 				var parts = line.Split( '|' );
 				if ( parts.Length >= 3 )
 				{
+					var binary = parts[1];
 					var libraries = parts[2].Trim();
-					var optional = AllOptional( libraries );
 
-					if ( !optional )
+					if ( AllOptional( libraries ) )
+					{
+						advisories++;
+						emit( Ansi.Dim + "  optional " + binary.PadRight( 42 ) + libraries + Ansi.Reset );
+					}
+					else if ( AllIcu( libraries ) )
+					{
+						advisories++;
+						// The shipped game/bin/dotnet tree carries fully-versioned
+						// libicu*.so.72.1 files but not the .so.72 soname links the
+						// loader asks for. .NET shrugs and falls back to invariant
+						// globalization, so this is an engine-side packaging note,
+						// not a stop-the-presses missing dependency.
+						emit( Ansi.Yellow + "  advisory " + Ansi.Reset + binary.PadRight( 42 )
+							+ Ansi.Dim + "shipped tree lacks .so.72 soname links ("
+							+ libraries + "); invariant-mode fallback" + Ansi.Reset );
+					}
+					else if ( AllPcre2( libraries ) )
+					{
+						pcre2.Add( binary );
+					}
+					else
+					{
 						found = true;
-
-					emit( optional
-						? Ansi.Dim + "  optional " + parts[1].PadRight( 42 ) + libraries + Ansi.Reset
-						: Ansi.Red + "  MISSING  " + Ansi.Reset + parts[1].PadRight( 42 )
+						errors++;
+						emit( Ansi.Red + "  MISSING  " + Ansi.Reset + binary.PadRight( 42 )
 							+ Ansi.Yellow + libraries + Ansi.Reset );
+					}
 				}
 			}
 			else if ( line.StartsWith( "SUMMARY|", StringComparison.Ordinal ) )
 			{
 				var parts = line.Split( '|' );
 				if ( parts.Length >= 3 )
-				{
-					emit( Ansi.Dim + "  checked " + parts[1] + " binaries, " + parts[2].Trim()
-						+ " with unresolved libraries" + Ansi.Reset );
-				}
+					total = parts[1];
 			}
 		}
+
+		// The shell counts every file with any miss; re-report with the
+		// advisories and the grouped pcre2 note folded out, so the count
+		// agrees with the red lines above it.
+		var noted = advisories + pcre2.Count;
+		emit( Ansi.Dim + "  checked " + total + " binaries, " + errors + " with unresolved libraries"
+			+ ( noted > 0 ? " (+" + noted + " explained below)" : "" ) + Ansi.Reset );
+
+		if ( pcre2.Count > 0 )
+			ReportPcre2( pcre2, emit );
 
 		if ( !found )
 			emit( Ansi.Green + "  nothing missing that matters" + Ansi.Reset );
 	}
 
 	/// <summary>
+	/// Qt 5.15 links libpcre2-16.so.0, which the steamrt4 platform does not ship
+	/// (it carries only libpcre2-8). Every Qt/tool binary then reports the same
+	/// single miss, so they are folded into one note.
+	///
+	/// The misses describe the shipped tree, not a live launch: at launch the
+	/// compat cache joins LD_LIBRARY_PATH inside the container, so a seeded -
+	/// or seedable - shim means these resolve in practice. Only a library the
+	/// host cannot provide either is a real problem, and even that blocks just
+	/// the editor's Qt tools, never the game.
+	/// </summary>
+	private static void ReportPcre2( List<string> binaries, Action<string> emit )
+	{
+		var uncached = new List<string>();
+		string? hint = null;
+
+		foreach ( var library in SteamRt4Compat.BestEffortLibraries )
+		{
+			if ( File.Exists( Path.Combine( SteamRt4Compat.CacheDirectory, library ) ) )
+				continue;
+
+			uncached.Add( library );
+
+			if ( hint is null && !SteamRt4Compat.ProbeHost( library, out var found ) )
+				hint = found;
+		}
+
+		if ( uncached.Count == 0 )
+		{
+			emit( Ansi.Dim + "  shimmed  Qt/tool stack's libpcre2-16.so.0 is in the compat cache;"
+				+ " these resolve at launch" + Ansi.Reset );
+		}
+		else if ( hint is null )
+		{
+			emit( Ansi.Dim + "  shimmed  Qt/tool stack's libpcre2-16.so.0 seeds from this host"
+				+ " on first containerised launch" + Ansi.Reset );
+		}
+		else
+		{
+			emit( Ansi.Yellow + "  Qt/tool stack needs libpcre2-16.so.0, which steamrt4 does not ship"
+				+ Ansi.Reset );
+			emit( Ansi.Yellow + "  and this host lacks it - run: " + hint + Ansi.Reset );
+		}
+
+		var shown = string.Join( ", ", binaries.Take( 6 ) );
+		if ( binaries.Count > 6 )
+			shown += ", ...";
+
+		emit( Ansi.Dim + "  affected (" + binaries.Count + "): " + shown + Ansi.Reset );
+		emit( Ansi.Dim + "  Editor/tools affected; game client unaffected."
+			+ " Long-term fix ships engine-side." + Ansi.Reset );
+	}
+
+	/// <summary>
+	/// True when every missing library is a shipped-ICU soname (see above).
+	/// </summary>
+	private static bool AllIcu( string libraries )
+	{
+		foreach ( var library in libraries.Split( ' ', StringSplitOptions.RemoveEmptyEntries ) )
+		{
+			if ( !library.StartsWith( "libicu", StringComparison.Ordinal ) )
+				return false;
+		}
+
+		return true;
+	}
+
+	/// <summary>
+	/// True when every missing library is the steamrt4-absent pcre2-16 (see above).
+	/// </summary>
+	private static bool AllPcre2( string libraries )
+	{
+		foreach ( var library in libraries.Split( ' ', StringSplitOptions.RemoveEmptyEntries ) )
+		{
+			if ( !library.StartsWith( "libpcre2-16", StringComparison.Ordinal ) )
+				return false;
+		}
+
+		return true;
+	}
+
+	/// <summary>
 	/// liblttng-ust is the CoreCLR tracing provider. .NET skips it silently
-	/// when absent, and neither sniper nor most desktops ship it, so reporting
+	/// when absent, and neither steamrt4 nor most desktops ship it, so reporting
 	/// it as a failure only sends people chasing a non-problem.
 	/// </summary>
 	private static readonly string[] OptionalLibraries = { "liblttng-ust" };
@@ -245,30 +372,78 @@ internal static class DependencyCheck
 		return true;
 	}
 
+	/// <summary>
+	/// The check is report-only and never seeds the cache (that happens on first
+	/// containerised launch, via MainWindow.PrepareRuntime). So an empty cache is
+	/// the normal pre-launch state, not a failure: entries the host can provide
+	/// render as dim "pending", and only a library missing on the HOST - which no
+	/// launch could seed - renders red, with the package that provides it.
+	/// Editor-only shims get the same rows, tagged; a host miss there warns but
+	/// never blocks, because the game launches without them.
+	/// </summary>
 	private static void ReportShimCache( Action<string> emit )
 	{
-		emit( Ansi.Bold + Ansi.Cyan + "--- sniper compat cache ---" + Ansi.NoBold + Ansi.Reset );
-		emit( Ansi.Dim + "  " + SniperCompat.CacheDirectory + Ansi.Reset );
+		emit( Ansi.Bold + Ansi.Cyan + "--- steamrt4 compat cache ---" + Ansi.NoBold + Ansi.Reset );
+		emit( Ansi.Dim + "  " + SteamRt4Compat.CacheDirectory + Ansi.Reset );
 
-		foreach ( var library in SniperCompat.RequiredLibraries )
+		var blocked = false;
+
+		foreach ( var library in SteamRt4Compat.RequiredLibraries )
 		{
-			var path = Path.Combine( SniperCompat.CacheDirectory, library );
-			emit( File.Exists( path )
-				? Ansi.Green + "  present  " + Ansi.Reset + library
-				: Ansi.Red + "  ABSENT   " + Ansi.Reset + library );
+			if ( !ReportCacheRow( library, false, emit ) )
+				blocked = true;
 		}
 
+		foreach ( var library in SteamRt4Compat.BestEffortLibraries )
+			ReportCacheRow( library, true, emit );
+
 		emit( "" );
-		emit( Ansi.Dim + "Sniper ships neither libunwind nor OpenSSL 3, so these are copied from the" );
-		emit( "host on first containerised launch. Without them the engine fails with" );
-		emit( "\"HRESULT: 0x80008088\" or a TypeInitializationException in Interop.Crypto." + Ansi.Reset );
+
+		if ( blocked )
+		{
+			emit( Ansi.Yellow + "Install the missing package(s) above, then do one" + Ansi.Reset );
+			emit( Ansi.Yellow + "containerised launch to seed the cache." + Ansi.Reset );
+			return;
+		}
+
+		emit( Ansi.Dim + "libunwind is not guaranteed in steamrt4, so it is copied from the" );
+		emit( "host on first containerised launch. Without it the engine can fail with" );
+		emit( "\"HRESULT: 0x80008088\"." + Ansi.Reset );
+	}
+
+	/// <summary>
+	/// One cache row. Returns false only for a required library the host cannot
+	/// provide - the one state no launch can recover from. A missing editor-only
+	/// shim returns true: unfortunate for Qt tools, irrelevant to the game.
+	/// </summary>
+	private static bool ReportCacheRow( string library, bool editorOnly, Action<string> emit )
+	{
+		var path = Path.Combine( SteamRt4Compat.CacheDirectory, library );
+		var tag = editorOnly ? "  [editor-only]" : "";
+
+		if ( File.Exists( path ) )
+		{
+			emit( Ansi.Green + "  present  " + Ansi.Reset + library + Ansi.Dim + tag + Ansi.Reset );
+			return true;
+		}
+
+		if ( SteamRt4Compat.ProbeHost( library, out var hint ) )
+		{
+			emit( Ansi.Dim + "  pending  " + Ansi.Reset + library + Ansi.Dim + tag
+				+ " - on this host, seeds on first containerised launch" + Ansi.Reset );
+			return true;
+		}
+
+		emit( Ansi.Red + "  HOST LACKS " + Ansi.Reset + library + Ansi.Dim + tag + Ansi.Reset
+			+ Ansi.Yellow + "   run: " + hint + Ansi.Reset );
+		return editorOnly;
 	}
 
 	/// <summary>
 	/// The engine's own copy of the shared framework, which is not the host's. The launchers are
 	/// built with -p:AppHostRelativeDotNet=bin/dotnet (BuildManaged.cs), so this is the runtime a
 	/// real launch resolves against; a system install under /usr/lib/dotnet is not even visible
-	/// inside the sniper container, which brings its own /usr.
+	/// inside the steamrt4 container, which brings its own /usr.
 	///
 	/// It moved to game/bin/dotnet in sbox-public 9eba55b6 ("game/dotnet -> game/bin/dotnet").
 	/// The old top-level path is still probed second, so a tree built before that move keeps
@@ -276,8 +451,8 @@ internal static class DependencyCheck
 	///
 	/// Pointing this at the wrong directory fails quietly as well as loudly: SBOX_DOTNET goes
 	/// over as an empty string, the sweep's `[ -d "$dir" ] || continue` drops the runtime half,
-	/// and the summary comes back clean - while it is precisely the .NET runtime's libunwind and
-	/// OpenSSL 3 that are missing inside the container.
+	/// and the summary comes back clean - while it is precisely the .NET runtime's libunwind
+	/// that may be missing inside the container.
 	/// </summary>
 	private static string? FindDotnetRuntime( string repoRoot )
 	{

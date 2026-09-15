@@ -70,7 +70,7 @@ internal static class AppPaths
 
 	/// <summary>
 	/// Writable cache for ampersand-owned build outputs (same XDG layout as
-	/// RunLog/SniperCompat): ~/.cache/sbox-ampersand/.
+	/// RunLog/SteamRt4Compat): ~/.cache/sbox-ampersand/.
 	/// </summary>
 	public static string CacheDir
 	{

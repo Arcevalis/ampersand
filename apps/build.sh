@@ -2,7 +2,7 @@
 # Build s&box from source - thin wrapper around the engine's Setup.sh.
 #
 # ampersand: name=Build S&Box
-# ampersand: sniper=never
+# ampersand: runtime=never
 #
 # History: this used to be a full port of sbox-public/bootstrap.sh (fetch
 # natives, ldd sweep, drive SboxBuild step by step). The engine now owns that

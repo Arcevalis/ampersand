@@ -6,18 +6,37 @@ using System.Text.RegularExpressions;
 
 namespace Ampersand;
 
-internal sealed class SniperInstall
+internal sealed class SteamRt4Install
 {
 	public string Path { get; }
 	public string Version { get; }
 
-	public SniperInstall( string path, string version )
+	public SteamRt4Install( string path, string version )
 	{
 		Path = path;
 		Version = version;
 	}
-	
-	public string RunScript => System.IO.Path.Combine( Path, "run-in-sniper" );
+
+	/// <summary>
+	/// The helper that runs a command inside the container. Valve generates
+	/// both this and <c>run</c> from the same template (they are identical in
+	/// sniper); probe the steamrt4 name first, then the generic one, so a
+	/// tool revision that ships only one of them still resolves.
+	/// </summary>
+	public string RunScript
+	{
+		get
+		{
+			foreach ( var name in new[] { "run-in-steamrt4", "run" } )
+			{
+				var candidate = System.IO.Path.Combine( Path, name );
+				if ( File.Exists( candidate ) )
+					return candidate;
+			}
+
+			return System.IO.Path.Combine( Path, "run-in-steamrt4" );
+		}
+	}
 
 	public string RequirementsCheck =>
 		System.IO.Path.Combine( Path, "pressure-vessel", "bin", "steam-runtime-check-requirements" );
@@ -32,7 +51,7 @@ internal sealed class SniperInstall
 }
 
 /// <summary>
-/// Finds Steam Linux Runtime 3.0 (sniper) and decides whether this host can
+/// Finds Steam Linux Runtime 4.0 (steamrt4) and decides whether this host can
 /// actually start a container in it.
 ///
 /// Discovery has to cope with every Steam packaging - the Debian package, the
@@ -40,20 +59,21 @@ internal sealed class SniperInstall
 /// with the runtime living in any registered library folder rather than the
 /// default one.
 /// </summary>
-internal static class SniperRuntime
+internal static class SteamRt4Runtime
 {
-	public const int SteamAppId = 1628350;
+	public const int SteamAppId = 4183110;
 
 	private static readonly Regex LibraryPath = new( "\"path\"\\s+\"([^\"]*)\"", RegexOptions.Compiled );
 
-	public static SniperInstall? Find()
+	public static SteamRt4Install? Find()
 	{
 		foreach ( var library in Libraries() )
 		{
-			var candidate = Path.Combine( library, "steamapps", "common", "SteamLinuxRuntime_sniper" );
+			var candidate = Path.Combine( library, "steamapps", "common", "SteamLinuxRuntime_4" );
 
-			if ( File.Exists( Path.Combine( candidate, "run-in-sniper" ) ) )
-				return new SniperInstall( candidate, ReadVersion( candidate ) );
+			if ( File.Exists( Path.Combine( candidate, "run-in-steamrt4" ) )
+				|| File.Exists( Path.Combine( candidate, "run" ) ) )
+				return new SteamRt4Install( candidate, ReadVersion( candidate ) );
 		}
 
 		return null;
@@ -161,7 +181,7 @@ internal static class SniperRuntime
 	/// nested bwrap. Asked from inside Steam's profile it tests what a launch will
 	/// actually do.
 	/// </summary>
-	public static bool CheckRequirements( SniperInstall install, out List<string> problems )
+	public static bool CheckRequirements( SteamRt4Install install, out List<string> problems )
 	{
 		problems = new List<string>();
 
@@ -239,7 +259,7 @@ internal static class SniperRuntime
 			problems.Add( "    bwrap --ro-bind / / true      # should print nothing and exit 0" );
 			problems.Add( "Common causes: running inside another container (distrobox, toolbox," );
 			problems.Add( "Flatpak), an immutable/atomic distro, or an incomplete runtime download" );
-			problems.Add( "- verify " + install.Path + " contains a sniper_platform_* directory." );
+			problems.Add( "- verify " + install.Path + " contains a steamrt4_platform_* directory." );
 		}
 
 		if ( problems.Count == 0 )
