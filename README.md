@@ -43,7 +43,7 @@ spawns yours and gets out of the way.
 
 | Requirement | Notes |
 |---|---|
-| Linux x86_64 | Primary target. Wayland works (Qt is forced to `xcb`/XWayland). |
+| Linux x86_64 | Primary target. Wayland works (Qt is forced to `xcb`/XWayland, SDL to the `x11` driver). Scene-view edge-snap needs the temporary **Cursor capture** toggle (XTEST fake motion; first use asks for remote-input consent). |
 | s&amp;box source checkout | A folder containing `game/` + `engine/` with `game/sbox` built. |
 | .NET 10 SDK | Only to *build* Ampersand. Not needed to *run* the AppImage. |
 | Steam + Steam Linux Runtime 4.0 (steamrt4) | Only for containerised launches / container dependency sweep. Install via `steam steam://install/4183110`. Steam must be running. |
@@ -199,8 +199,20 @@ Ampersand passes it as `+game <value>`. Empty clears it.
   **host and inside steamrt4**, plus the steamrt4 compat cache status. Runs via
   `ampersand --dependency-check`. (Host-clean but container-broken is the
   classic trap. This checks both.)
+- **Cursor capture (temporary):** XTEST edge-snap for scene-view camera drags
+  on XWayland, until Facepunch fixes cursor capture natively (then this goes
+  away). Opt-in checkbox, takes effect on next launch; first drag asks for
+  remote-input consent, releasing the mouse stops all injection. Wired via
+  `SBOX_XCONFCAPTURE=1` + `LD_PRELOAD` in `apps/_common.sh`, source vendored
+  at `apps/patches/xconfinecapture.c` (built to the cache dir on demand).
 - **Open log folder**: every run is tee'd to `~/.cache/sbox-ampersand/logs/`
-  whether it used a terminal or not.
+  whether it used a terminal or not. Each log opens with the exact command
+  that was run (`$ cd ...` plus env assignments and argv, shell-quoted) so a
+  launch can be reproduced from the log alone. Below the header, the scripts
+  narrate themselves (`+ [script:line] command` trace lines via `set -x` in
+  `apps/_common.sh`, on by default) so inner steps — shim checks, the final
+  `exec` of the engine binary with its composed `LD_PRELOAD` — are captured
+  too. `SBOX_TRACE=0` silences the trace.
 
 ### CLI modes
 
@@ -250,7 +262,7 @@ DependencyCheck.cs      # host + container ldd sweep + shim report
 SboxSettings.cs         # persisted s&box path + server game (~/.local/share/…)
 RepoRoot.cs / AppPaths.cs / RunLog.cs / Ansi.cs / TerminalTheme.cs …
 apps/                   # launch scripts (sbox.sh, sbox-dev.sh, sbox-server.sh, build.sh, _common.sh)
-apps/patches/           # vendored SDL embed-fix source (sdlwinfix.c; built to the ampersand cache dir on demand)
+apps/patches/           # vendored shim sources (sdlwinfix.c, xconfinecapture.c; built to the ampersand cache dir on demand)
 assets/                 # ampersand.desktop, AppRun, ampersand.png (logo)
 install-appimage.sh       # publish → AppDir → AppImage → install
 uninstall.sh              # remove an install (AppImage, entry, icon, menu pin)

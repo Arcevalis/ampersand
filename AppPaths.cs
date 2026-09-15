@@ -96,4 +96,18 @@ internal static class AppPaths
 	/// scripts/patches/ at build time), or null if this install lacks it.
 	/// </summary>
 	public static string? FindSdlWinFixSource() => FindScript( Path.Combine( "patches", "sdlwinfix.c" ) );
+
+	/// <summary>
+	/// Default location of the built TEMPORARY XTEST edge-snap library
+	/// (scene-view cursor gap on XWayland; remove once Facepunch fixes
+	/// cursor capture natively). Same cache-dir/on-demand arrangement as above.
+	/// Overridable with SBOX_XCONFCAPTURE_SO.
+	/// </summary>
+	public static string ConfineCaptureLibrary => Path.Combine( CacheDir, "libxconfinecapture.so" );
+
+	/// <summary>
+	/// The vendored TEMPORARY edge-snap source (apps/patches/xconfinecapture.c,
+	/// shipped to scripts/patches/ at build time), or null if this install lacks it.
+	/// </summary>
+	public static string? FindConfineCaptureSource() => FindScript( Path.Combine( "patches", "xconfinecapture.c" ) );
 }

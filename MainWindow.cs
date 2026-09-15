@@ -36,6 +36,7 @@ internal sealed class MainWindow : Window
 	private readonly CheckBox steamRuntime;
 	private readonly CheckBox systemTerminal;
 	private readonly CheckBox sdlWinFix;
+	private readonly CheckBox confineCapture;
 
 	private LaunchTarget? selected;
 	private bool updatingCheckbox;
@@ -173,10 +174,11 @@ internal sealed class MainWindow : Window
 
 		steamRuntime = new CheckBox
 		{
-			Content = "Launch in Steam Runtime",
+			Content = "Steam Runtime",
 			IsEnabled = false,
 			VerticalAlignment = VerticalAlignment.Center
 		};
+		ToolTip.SetTip( steamRuntime, "Launch in Steam Runtime" );
 		steamRuntime.IsCheckedChanged += ( _, _ ) =>
 		{
 			if ( !updatingCheckbox && selected is not null )
@@ -187,10 +189,11 @@ internal sealed class MainWindow : Window
 		// at spawn time - there is nothing to attach to a window opened later.
 		systemTerminal = new CheckBox
 		{
-			Content = "Launch with system terminal",
+			Content = "System terminal",
 			IsEnabled = false,
 			VerticalAlignment = VerticalAlignment.Center
 		};
+		ToolTip.SetTip( systemTerminal, "Launch with system terminal" );
 		systemTerminal.IsCheckedChanged += ( _, _ ) =>
 		{
 			if ( !updatingCheckbox && selected is not null )
@@ -203,7 +206,7 @@ internal sealed class MainWindow : Window
 		// with the toggle once Facepunch fixes it natively.
 		sdlWinFix = new CheckBox
 		{
-			Content = "SDL embed fix (Linux)",
+			Content = "SDL embed fix",
 			VerticalAlignment = VerticalAlignment.Center,
 			IsChecked = SboxSettings.GetSdlWinFix()
 		};
@@ -222,15 +225,44 @@ internal sealed class MainWindow : Window
 			}
 		};
 
+		// TEMPORARY XTEST edge-snap for the scene-view cursor gap on XWayland
+		// (cursor never snaps edge to edge mid-drag). Remove once Facepunch
+		// fixes cursor capture natively. Same arrangement as the SDL embed
+		// fix above: global, persisted in settings.json, takes effect on
+		// the next launch.
+		confineCapture = new CheckBox
+		{
+			Content = "Cursor capture",
+			VerticalAlignment = VerticalAlignment.Center,
+			IsChecked = SboxSettings.GetConfineCapture()
+		};
+		ToolTip.SetTip( confineCapture, "TEMPORARY XTEST edge-snap for scene-view camera drags:\n"
+			+ "re-issues each drag wrap as fake device motion so the cursor\n"
+			+ "visibly snaps edge to edge on Linux/XWayland. First use asks\n"
+			+ "for remote-input consent; releasing the mouse stops it.\n"
+			+ "Takes effect on next launch. Dormant unless ticked.\n"
+			+ "Remove once Facepunch fixes cursor capture natively." );
+		confineCapture.IsCheckedChanged += async ( _, _ ) =>
+		{
+			if ( updatingCheckbox ) return;
+			try { SboxSettings.SaveConfineCapture( confineCapture.IsChecked == true ); }
+			catch ( Exception e )
+			{
+				await ConfirmDialog.Notify( this, "Could not save settings", e.Message + "\n\nPath: " + SboxSettings.ConfigPath );
+			}
+		};
+
 		var toggles = new StackPanel
 		{
 			Orientation = Orientation.Horizontal,
 			Spacing = 16,
-			VerticalAlignment = VerticalAlignment.Center
+			VerticalAlignment = VerticalAlignment.Center,
+			Margin = new Thickness( 10, 6, 10, 6 )
 		};
 		toggles.Children.Add( systemTerminal );
 		toggles.Children.Add( steamRuntime );
 		toggles.Children.Add( sdlWinFix );
+		toggles.Children.Add( confineCapture );
 
 		statusText = new TextBlock
 		{
@@ -245,16 +277,16 @@ internal sealed class MainWindow : Window
 		stopButton = new Button { Content = "Stop", IsEnabled = false, Margin = new Thickness( 8, 6, 10, 6 ) };
 		stopButton.Click += ( _, _ ) => selected?.Runner.Stop();
 
-		// One bar, not the old header-plus-strip: with no pane between them there
-		// is nothing for two separate surfaces to separate.
-		var bar = new Grid { ColumnDefinitions = new ColumnDefinitions( "*,Auto,Auto" ) };
+		// Toggles live in their own strip above the status bar - four of them
+		// no longer fit beside the status text and Stop button.
+		var bar = new Grid { ColumnDefinitions = new ColumnDefinitions( "*,Auto" ) };
 		bar.Children.Add( statusText );
-		Grid.SetColumn( toggles, 1 );
-		bar.Children.Add( toggles );
-		Grid.SetColumn( stopButton, 2 );
+		Grid.SetColumn( stopButton, 1 );
 		bar.Children.Add( stopButton );
 
 		var targetPanel = Surface( targetList, TerminalTheme.TargetPanel, new Thickness( 0, 0, 0, 1 ) );
+		// Bottom rule only: the panel above already draws the rule facing us.
+		var togglePanel = Surface( toggles, TerminalTheme.ToolbarPanel, new Thickness( 0, 0, 0, 1 ) );
 		var barPanel = Surface( bar, TerminalTheme.ToolbarPanel, new Thickness( 0 ) );
 
 		// Dedicated server game field, only visible when sbox-server is selected.
@@ -302,13 +334,15 @@ internal sealed class MainWindow : Window
 		sboxServerGamePanel = Surface( sboxServerGameContent, TerminalTheme.ToolbarPanel, new Thickness( 0, 1, 0, 0 ) );
 		sboxServerGamePanel.IsVisible = false;
 
-		var right = new Grid { RowDefinitions = new RowDefinitions( "Auto,*,Auto,Auto" ) };
+		var right = new Grid { RowDefinitions = new RowDefinitions( "Auto,*,Auto,Auto,Auto" ) };
 		right.Children.Add( SidebarHeader( "SHELL SCRIPTS" ) );
 		Grid.SetRow( targetPanel, 1 );
 		right.Children.Add( targetPanel );
-		Grid.SetRow( barPanel, 2 );
+		Grid.SetRow( togglePanel, 2 );
+		right.Children.Add( togglePanel );
+		Grid.SetRow( barPanel, 3 );
 		right.Children.Add( barPanel );
-		Grid.SetRow( sboxServerGamePanel, 3 );
+		Grid.SetRow( sboxServerGamePanel, 4 );
 		right.Children.Add( sboxServerGamePanel );
 
 		depCheckButton = SidebarButton( "Check for missing dependencies" );
@@ -623,6 +657,10 @@ internal sealed class MainWindow : Window
 		if ( !await EnsureSdlWinFixShimAsync( root, target ) )
 			return;
 
+		// Pointer-capture shim: same build-on-demand arrangement.
+		if ( !await EnsureConfineCaptureShimAsync( root, target ) )
+			return;
+
 		var env = new Dictionary<string, string>
 		{
 			["SBOX_REPO_ROOT"] = root,
@@ -630,12 +668,22 @@ internal sealed class MainWindow : Window
 			// Only xcb is bundled ("Available platform plugins are: xcb").
 			// Set here so it crosses the Steam Runtime container boundary via --env;
 			// _common.sh also hard-sets it for direct script runs.
-			["QT_QPA_PLATFORM"] = "xcb"
+			["QT_QPA_PLATFORM"] = "xcb",
+			// SDL3 defaults to the Wayland backend when WAYLAND_DISPLAY is set,
+			// making the viewport a native Wayland surface: no X window, no
+			// in-process X press owner, so every X grab fails AlreadyGrabbed and
+			// mid-drag warps die in the compositor. Force X11 so the press owner
+			// is SDL's in-process X connection (SDL3 name; SDL2 called it
+			// SDL_VIDEODRIVER). Same --env crossing as above.
+			["SDL_VIDEO_DRIVER"] = "x11"
 		};
 		// TRANSIENT SDL embed fix (see sdlWinFix checkbox): persisted toggle,
 		// read live so it applies to this launch. Same --env crossing as above.
 		if ( sdlWinFix.IsChecked == true )
 			env["SBOX_SDLWINFIX"] = "1";
+		// TEMPORARY XTEST edge-snap (see confineCapture checkbox): same arrangement.
+		if ( confineCapture.IsChecked == true )
+			env["SBOX_XCONFCAPTURE"] = "1";
 		var command = new List<string>();
 
 		// Held across the await below, not just the spawn: PrepareRuntime can sit
@@ -891,6 +939,95 @@ internal sealed class MainWindow : Window
 		{
 			await Fail( target, "gcc not found",
 				"Could not start gcc: " + output + "\n\nInstall gcc and the X11 headers to build the shim, or untick the SDL embed fix." );
+			return false;
+		}
+		if ( exit != 0 || !File.Exists( so ) )
+		{
+			await Fail( target, "Shim build failed", "gcc exited with code " + exit + ":\n\n" + output );
+			return false;
+		}
+		return true;
+	}
+
+	/// The TEMPORARY XTEST edge-snap needs its helper library built (vendored
+	/// source at apps/patches/xconfinecapture.c, built .so in the ampersand
+	/// cache dir - see AppPaths). Same build-on-demand arrangement as the SDL
+	/// embed fix above; only the game/editor scripts consume _common.sh,
+	/// sbox-server.sh is standalone and never touches the shim. Remove with
+	/// the shim once Facepunch fixes cursor capture natively.
+	/// </summary>
+	private async Task<bool> EnsureConfineCaptureShimAsync( string root, LaunchTarget target )
+	{
+		if ( confineCapture.IsChecked != true || target.ScriptFile == "sbox-server.sh" )
+			return true;
+
+		var so = Environment.GetEnvironmentVariable( "SBOX_XCONFCAPTURE_SO" );
+		if ( string.IsNullOrWhiteSpace( so ) )
+			so = AppPaths.ConfineCaptureLibrary;
+		if ( File.Exists( so ) )
+			return true;
+
+		var build = await ConfirmDialog.Show( this, "Cursor capture shim missing",
+			"Cursor capture is enabled, but its helper library has not been built yet:\n"
+				+ so + "\n\nBuild it now? This compiles the vendored shim (apps/patches/xconfinecapture.c) with gcc and takes a few seconds.",
+			"Build it", "Cancel launch" );
+		if ( !build )
+		{
+			statusText.Text = target.Name + ": launch cancelled (shim not built)";
+			UpdateStatusBar();
+			return false;
+		}
+
+		var src = AppPaths.FindConfineCaptureSource();
+		if ( src is null )
+		{
+			await Fail( target, "Shim source missing",
+				"Expected the vendored shim source at scripts/patches/xconfinecapture.c next to the built app.\n\nReinstall ampersand, or untick cursor capture." );
+			return false;
+		}
+
+		try { Directory.CreateDirectory( Path.GetDirectoryName( so )! ); } catch { }
+
+		statusText.Text = target.Name + ": building cursor capture shim...";
+		UpdateStatusBar();
+
+		var srcDir = Path.GetDirectoryName( src )!;
+		var srcFile = Path.GetFileName( src );
+		var (exit, output) = await Task.Run( () =>
+		{
+			using var proc = new Process
+			{
+				StartInfo = new ProcessStartInfo
+				{
+					FileName = "gcc",
+					WorkingDirectory = srcDir,
+					UseShellExecute = false,
+					RedirectStandardOutput = true,
+					RedirectStandardError = true
+				}
+			};
+			foreach ( var arg in new[] { "-D_GNU_SOURCE", "-shared", "-fPIC", "-O1", "-o", so, srcFile, "-ldl" } )
+				proc.StartInfo.ArgumentList.Add( arg );
+			try
+			{
+				proc.Start();
+			}
+			catch ( System.ComponentModel.Win32Exception e )
+			{
+				// gcc itself is missing.
+				return (-1, e.Message);
+			}
+			// gcc output is small; drain stdout first, then wait, then stderr.
+			var stdout = proc.StandardOutput.ReadToEnd();
+			proc.WaitForExit();
+			var stderr = proc.StandardError.ReadToEnd();
+			return (proc.ExitCode, (stdout + "\n" + stderr).Trim());
+		} );
+
+		if ( exit == -1 )
+		{
+			await Fail( target, "gcc not found",
+				"Could not start gcc: " + output + "\n\nInstall gcc and the X11 headers to build the shim, or untick cursor capture." );
 			return false;
 		}
 		if ( exit != 0 || !File.Exists( so ) )

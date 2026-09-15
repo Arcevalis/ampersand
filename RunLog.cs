@@ -66,6 +66,48 @@ internal static class RunLog
 		catch { }
 	}
 
+	/// <summary>
+	/// Appends the exact command the launcher ran (cwd + env + argv) to the
+	/// log, so a later reader can reproduce the launch from the log alone.
+	/// Shell-quoted, safe to paste into bash. Call right after CreateLogPath,
+	/// which already wrote the --- banner line.
+	/// </summary>
+	public static void WriteCommandHeader(
+		string path,
+		IReadOnlyList<string> command,
+		string workingDirectory,
+		IReadOnlyDictionary<string, string> extraEnv )
+	{
+		try
+		{
+			using var w = new StreamWriter( new FileStream( path, FileMode.Append, FileAccess.Write, FileShare.ReadWrite ) ) { AutoFlush = true };
+			if ( !string.IsNullOrWhiteSpace( workingDirectory ) )
+				w.WriteLine( "$ cd " + Quote( workingDirectory ) );
+			var parts = new List<string>();
+			if ( extraEnv is not null )
+				foreach ( var pair in extraEnv )
+					parts.Add( $"{pair.Key}={Quote( pair.Value ?? string.Empty )}" );
+			if ( command is not null )
+				foreach ( var arg in command )
+					parts.Add( Quote( arg ?? string.Empty ) );
+			w.WriteLine( "$ " + string.Join( " ", parts ) );
+			w.WriteLine();
+		}
+		catch { }
+	}
+
+	private static string Quote( string s )
+	{
+		if ( s.Length == 0 )
+			return "''";
+		foreach ( var c in s )
+		{
+			if ( !( char.IsLetterOrDigit( c ) || c is '_' or '-' or '.' or '/' or ':' or ',' or '+' or '=' or '@' or '%' ) )
+				return "'" + s.Replace( "'", "'\\''" ) + "'";
+		}
+		return s;
+	}
+
 	/// <summary>Last N lines, ANSI-stripped, truncated to maxChars.</summary>
 	public static string Tail( string? path, int maxLines = 80, int maxChars = 6000 )
 	{

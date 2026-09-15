@@ -81,7 +81,9 @@ internal sealed class ProcessRunner
 	{
 		// Always log: wrap command with bash tee wrapper on the host so konsole
 		// still shows output but a copy lands in ~/.cache/sbox-ampersand/logs.
+		// Record the command itself first so the log shows what was run.
 		LastLogPath = RunLog.CreateLogPath( Name );
+		RunLog.WriteCommandHeader( LastLogPath, command, workingDirectory, extraEnv );
 
 		if ( !BashAvailable() )
 		{
@@ -124,16 +126,13 @@ internal sealed class ProcessRunner
 		string workingDirectory,
 		IReadOnlyDictionary<string, string> extraEnv )
 	{
-		// Reuse existing log if StartInTerminal already created one for fallback.
+		// Reuse existing log if StartInTerminal already created one for fallback
+		// (it already wrote the command header, so only write ours on a fresh log).
+		var freshLog = LastLogPath is null;
 		LastLogPath ??= RunLog.CreateLogPath( Name );
 
-		// Ensure file exists with header.
-		try
-		{
-			if ( !File.Exists( LastLogPath ) )
-				File.WriteAllText( LastLogPath, $"--- {Name} {DateTime.Now:O} ---{Environment.NewLine}" );
-		}
-		catch { }
+		if ( freshLog )
+			RunLog.WriteCommandHeader( LastLogPath, command, workingDirectory, extraEnv );
 
 		if ( !TryStart( command, workingDirectory, extraEnv, redirect: true, out var problem, LastLogPath ) )
 		{

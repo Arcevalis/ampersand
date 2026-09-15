@@ -4,7 +4,7 @@ using System.Text.Json;
 
 namespace Ampersand;
 
-internal sealed record SboxConfig( string SboxRoot, string? SboxServerGame = null, bool SdlWinFix = false );
+internal sealed record SboxConfig( string SboxRoot, string? SboxServerGame = null, bool SdlWinFix = false, bool ConfineCapture = false );
 
 internal static class SboxSettings
 {
@@ -152,7 +152,18 @@ internal static class SboxSettings
 				sdlWinFix = swf.GetString() is string s && ( s == "1" || s.Equals( "true", StringComparison.OrdinalIgnoreCase ) );
 		}
 
-		return new SboxConfig( root, serverGame, sdlWinFix );
+		// Optional TEMPORARY XTEST edge-snap for the scene-view cursor gap
+		// (vendored apps/patches/xconfinecapture.c; remove once Facepunch
+		// fixes cursor capture natively). Absent key = off.
+		var confineCapture = false;
+		if ( doc.RootElement.TryGetProperty( "confineCapture", out var cc ) || doc.RootElement.TryGetProperty( "ConfineCapture", out cc ) )
+		{
+			if ( cc.ValueKind == JsonValueKind.True ) confineCapture = true;
+			else if ( cc.ValueKind == JsonValueKind.String )
+				confineCapture = cc.GetString() is string cs && ( cs == "1" || cs.Equals( "true", StringComparison.OrdinalIgnoreCase ) );
+		}
+
+		return new SboxConfig( root, serverGame, sdlWinFix, confineCapture );
 		}
 		catch { return null; }
 	}
@@ -243,6 +254,23 @@ internal static class SboxSettings
 		Save( root, existing?.SboxServerGame, enabled );
 	}
 
+	public static bool GetConfineCapture()
+	{
+		try { return Load()?.ConfineCapture == true; } catch { return false; }
+	}
+
+	public static void SaveConfineCapture( bool enabled )
+	{
+		var existing = Load();
+		var root = existing?.SboxRoot ?? Resolve() ?? GetStalePersistedPath() ?? "";
+		if ( string.IsNullOrWhiteSpace( root ) )
+		{
+			var detected = RepoRoot.Find();
+			if ( detected is not null ) root = detected;
+		}
+		Save( root, existing?.SboxServerGame, existing?.SdlWinFix, enabled );
+	}
+
 	public static void SaveServerGame( string? serverGame )
 	{
 		var existing = Load();
@@ -260,29 +288,31 @@ internal static class SboxSettings
 
 	public static void Save( string sboxRoot )
 	{
-		// Preserve existing serverGame and sdlWinFix when only root is being saved (e.g. Resolve migration).
+		// Preserve existing serverGame and shim toggles when only root is being saved (e.g. Resolve migration).
 		var existing = Load();
-		Save( sboxRoot, existing?.SboxServerGame, existing?.SdlWinFix );
+		Save( sboxRoot, existing?.SboxServerGame, existing?.SdlWinFix, existing?.ConfineCapture );
 	}
 
 	public static void Save( string sboxRoot, string? serverGame )
 	{
-		Save( sboxRoot, serverGame, Load()?.SdlWinFix );
+		var existing = Load();
+		Save( sboxRoot, serverGame, existing?.SdlWinFix, existing?.ConfineCapture );
 	}
 
-	public static void Save( string sboxRoot, string? serverGame, bool? sdlWinFix )
+	public static void Save( string sboxRoot, string? serverGame, bool? sdlWinFix, bool? confineCapture = null )
 	{
 		var norm = Normalize( sboxRoot ) ?? sboxRoot;
 		var normGame = NormalizeServerGame( serverGame );
 		var flag = sdlWinFix ?? Load()?.SdlWinFix ?? false;
+		var ccFlag = confineCapture ?? Load()?.ConfineCapture ?? false;
 		var dir = ConfigDirectory;
 		Directory.CreateDirectory( dir );
 
 		string json;
 		if ( normGame is not null )
-			json = JsonSerializer.Serialize( new { sboxRoot = norm, sboxServerGame = normGame, sdlWinFix = flag }, new JsonSerializerOptions { WriteIndented = true } );
+			json = JsonSerializer.Serialize( new { sboxRoot = norm, sboxServerGame = normGame, sdlWinFix = flag, confineCapture = ccFlag }, new JsonSerializerOptions { WriteIndented = true } );
 		else
-			json = JsonSerializer.Serialize( new { sboxRoot = norm, sdlWinFix = flag }, new JsonSerializerOptions { WriteIndented = true } );
+			json = JsonSerializer.Serialize( new { sboxRoot = norm, sdlWinFix = flag, confineCapture = ccFlag }, new JsonSerializerOptions { WriteIndented = true } );
 
 		var tmp = ConfigPath + ".tmp";
 		File.WriteAllText( tmp, json );

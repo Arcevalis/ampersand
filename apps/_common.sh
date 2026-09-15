@@ -33,6 +33,26 @@
 
 set -eu
 
+# Self-narration: with tracing on, every command below (ROOT probing, shim
+# checks, the final exec of the engine binary) is echoed to stderr with its
+# script and line number, so it lands in Ampersand's tee'd run log next to
+# the launcher-side header. All four launch scripts source this file, so one
+# gate covers them all. Default on - a launch costs ~10 lines; SBOX_TRACE=0
+# silences it. Only --env allowlisted variables cross into the Steam runtime
+# container, so set that via --env to quiet container runs too.
+if [ "${SBOX_TRACE:-1}" != "0" ]; then
+	# Location-tagged prefix only where the shell supports LINENO (host
+	# dash/bash); the Steam runtime container's sh errors on it under set
+	# -u and prints PS4 literally, so fall back to a plain prefix there.
+	# The subshell confines the probe - its own stderr goes to /dev/null.
+	if ( eval ': "$LINENO"' ) 2>/dev/null; then
+		export PS4='+ [$0:$LINENO] '
+	else
+		export PS4='+ '
+	fi
+	set -x
+fi
+
 # The launcher passes SBOX_REPO_ROOT; the fallback keeps the script usable by
 # hand from the built scripts dir (OutDir/scripts/) or from repo/apps/.
 # When built, scripts live at <OutDir>/scripts/ so dirname $0 is .../scripts
@@ -99,10 +119,51 @@ sbox_exec()
 		export LD_PRELOAD
 	fi
 
+	# TEMPORARY scene-view edge-snap for the cursor gap on XWayland, until
+	# Facepunch fixes cursor capture natively (remove this block then).
+	# Managed warps via Qt never land mid-drag: the Wayland implicit grab
+	# owns the cursor, and explicit X grabs fail AlreadyGrabbed. This shim
+	# re-issues each drag warp's destination as XTEST fake motion (device
+	# path, needs the compositor's remote-input consent on first use) and
+	# installs no grab, so there is nothing that can wedge input. Vendor
+	# source at apps/patches/xconfinecapture.c, built into the ampersand
+	# cache dir on demand like sdlwinfix above).
+	# Opt-in only: SBOX_XCONFCAPTURE=1 arms it, default off. Override locations
+	# with SBOX_XCONFCAPTURE_SO / XCONFCAPTURE_LOG.
+	# Note: only --env allowlisted variables cross into the Steam runtime
+	# container, so use host-side runs for trials.
+	if [ "${SBOX_XCONFCAPTURE:-0}" != "0" ]; then
+		_xconfcapture_so="${SBOX_XCONFCAPTURE_SO:-${XDG_CACHE_HOME:-$HOME/.cache}/sbox-ampersand/libxconfinecapture.so}"
+		if [ ! -f "$_xconfcapture_so" ]; then
+			echo "error: SBOX_XCONFCAPTURE=$SBOX_XCONFCAPTURE but capture shim missing at $_xconfcapture_so" >&2
+			echo "build it by hand: gcc -D_GNU_SOURCE -shared -fPIC -O1 -o libxconfinecapture.so xconfinecapture.c -ldl" >&2
+			exit 1
+		fi
+		if [ -z "${XCONFCAPTURE_LOG:-}" ]; then
+			XCONFCAPTURE_LOG="$GAME_DIR/logs/xconfinecapture.log"
+			export XCONFCAPTURE_LOG
+			mkdir -p "$GAME_DIR/logs"
+			: > "$XCONFCAPTURE_LOG"
+		fi
+		LD_PRELOAD="$LD_PRELOAD:$_xconfcapture_so"
+		export LD_PRELOAD
+	fi
+
 	# Wayland's Qt platform plugin is not shipped/unstable; force X11 (xcb)
 	# via XWayland (only xcb is bundled - "Available platform plugins are: xcb").
 	QT_QPA_PLATFORM=xcb
 	export QT_QPA_PLATFORM
+
+	# SDL3 equivalent of the above: it defaults to the Wayland backend when
+	# WAYLAND_DISPLAY is set, making the viewport a native Wayland surface
+	# with no X window and no in-process X press owner (every X grab then
+	# fails AlreadyGrabbed and mid-drag warps die in the compositor). Force
+	# X11 so the press owner is SDL's in-process X connection. SDL3 name -
+	# SDL2 called it SDL_VIDEODRIVER. Only --env allowlisted variables cross
+	# into the Steam runtime container, so the launcher passes this one the
+	# same way; the hard-set here keeps direct script runs consistent.
+	SDL_VIDEO_DRIVER=x11
+	export SDL_VIDEO_DRIVER
 
 	cd "$GAME_DIR"
 	exec "$_exe" "$@"
