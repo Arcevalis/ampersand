@@ -46,8 +46,24 @@ internal static class Bootstrap
 
 		// --- engine setup (heavy lifting lives here) --------------------------
 		emit( Ansi.Bold + Ansi.Cyan + "--- sh Setup.sh ---" + Ansi.NoBold + Ansi.Reset );
+		// Case-insensitive asset fallback (opt-in Casefold toggle): export it
+		// around Setup.sh so the native content toolchain (contentbuilder and
+		// the resourcecompiler children it spawns) inherits it. Warn-and-
+		// continue without it when the library cannot be built - setup itself
+		// must never hard-fail on the compat layer.
+		Dictionary<string, string>? setupEnv = null;
+		var casefoldSo = EnsureCasefoldLibrary( emit );
+		if ( casefoldSo is not null )
+		{
+			var existing = Environment.GetEnvironmentVariable( "LD_PRELOAD" );
+			setupEnv = new Dictionary<string, string>
+			{
+				["LD_PRELOAD"] = string.IsNullOrEmpty( existing ) ? casefoldSo : casefoldSo + ":" + existing
+			};
+			emit( Ansi.Dim + "  casefold shim: " + casefoldSo + Ansi.Reset );
+		}
 		// Via sh, not ./. : Setup.sh is stored without the exec bit upstream.
-		var setupCode = RunProcess( "sh", new[] { "Setup.sh" }, repoRoot, emit );
+		var setupCode = RunProcess( "sh", new[] { "Setup.sh" }, repoRoot, emit, setupEnv );
 		emit( "" );
 
 		if ( setupCode != 0 )
@@ -83,7 +99,7 @@ internal static class Bootstrap
 		emit( Ansi.Bold + Ansi.White + "=== build done ===" + Ansi.NoBold + Ansi.Reset );
 	}
 
-	private static int RunProcess( string exe, IReadOnlyList<string> args, string workDir, Action<string> emit )
+	private static int RunProcess( string exe, IReadOnlyList<string> args, string workDir, Action<string> emit, IReadOnlyDictionary<string, string>? extraEnv = null )
 	{
 		var psi = new ProcessStartInfo
 		{
@@ -94,6 +110,11 @@ internal static class Bootstrap
 			RedirectStandardError = true,
 		};
 		foreach ( var a in args ) psi.ArgumentList.Add( a );
+		if ( extraEnv is not null )
+		{
+			foreach ( var pair in extraEnv )
+				psi.Environment[pair.Key] = pair.Value;
+		}
 
 		emit( Ansi.Dim + "  $ " + exe + " " + string.Join( " ", args.Select( Quote ) ) + Ansi.Reset );
 
@@ -116,6 +137,72 @@ internal static class Bootstrap
 	}
 
 	private static string Quote( string s ) => s.Contains( ' ' ) ? "\"" + s + "\"" : s;
+
+	/// <summary>
+	/// Ensures the case-insensitive asset fallback library exists, building
+	/// the vendored source (apps/patches/casefold.c) with gcc when needed.
+	/// Returns its path, or null (with a warning emitted) when the toggle is
+	/// off, gcc is missing, or the build fails - setup then proceeds without
+	/// the fallback rather than failing on the compat layer.
+	/// </summary>
+	private static string? EnsureCasefoldLibrary( Action<string> emit )
+	{
+		bool enabled;
+		try { enabled = SboxSettings.GetCasefold(); }
+		catch { enabled = false; }
+		if ( !enabled )
+			return null;
+
+		var overrideSo = Environment.GetEnvironmentVariable( "SBOX_CASEFOLD_SO" );
+		var so = string.IsNullOrWhiteSpace( overrideSo ) ? AppPaths.CasefoldLibrary : overrideSo;
+		if ( File.Exists( so ) )
+			return so;
+
+		var src = AppPaths.FindCasefoldSource();
+		if ( src is null )
+		{
+			emit( Ansi.Yellow + "  casefold: vendored source missing (scripts/patches/casefold.c) - continuing without the fallback" + Ansi.Reset );
+			return null;
+		}
+
+		try { Directory.CreateDirectory( Path.GetDirectoryName( so )! ); } catch { }
+
+		emit( Ansi.Dim + "  casefold: building shim with gcc..." + Ansi.Reset );
+		try
+		{
+			var psi = new ProcessStartInfo
+			{
+				FileName = "gcc",
+				WorkingDirectory = Path.GetDirectoryName( src )!,
+				UseShellExecute = false,
+				RedirectStandardOutput = true,
+				RedirectStandardError = true,
+			};
+			foreach ( var arg in new[] { "-D_GNU_SOURCE", "-shared", "-fPIC", "-O2", "-o", so, Path.GetFileName( src ), "-ldl" } )
+				psi.ArgumentList.Add( arg );
+			using var proc = Process.Start( psi );
+			if ( proc is null )
+			{
+				emit( Ansi.Yellow + "  casefold: could not start gcc - continuing without the fallback" + Ansi.Reset );
+				return null;
+			}
+			var output = proc.StandardOutput.ReadToEnd() + "\n" + proc.StandardError.ReadToEnd();
+			proc.WaitForExit();
+			if ( proc.ExitCode != 0 || !File.Exists( so ) )
+			{
+				emit( Ansi.Yellow + $"  casefold: gcc failed (exit {proc.ExitCode}) - continuing without the fallback" + Ansi.Reset );
+				emit( Ansi.Dim + "  " + output.Trim().Replace( "\n", "\n  " ) + Ansi.Reset );
+				return null;
+			}
+		}
+		catch ( Exception e )
+		{
+			emit( Ansi.Yellow + "  casefold: build failed (" + e.Message + ") - continuing without the fallback" + Ansi.Reset );
+			return null;
+		}
+
+		return so;
+	}
 
 	// ---- native dependency report (kept; Setup.sh has no per-binary report) ----
 

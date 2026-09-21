@@ -110,4 +110,18 @@ internal static class AppPaths
 	/// shipped to scripts/patches/ at build time), or null if this install lacks it.
 	/// </summary>
 	public static string? FindConfineCaptureSource() => FindScript( Path.Combine( "patches", "xconfinecapture.c" ) );
+
+	/// <summary>
+	/// Default location of the built case-insensitive asset fallback library
+	/// (wrong-case FBX references committed upstream; opt-in Casefold toggle,
+	/// off by default). Same cache-dir/on-demand arrangement as above.
+	/// Overridable with SBOX_CASEFOLD_SO.
+	/// </summary>
+	public static string CasefoldLibrary => Path.Combine( CacheDir, "libcasefold.so" );
+
+	/// <summary>
+	/// The vendored casefold source (apps/patches/casefold.c, shipped to
+	/// scripts/patches/ at build time), or null if this install lacks it.
+	/// </summary>
+	public static string? FindCasefoldSource() => FindScript( Path.Combine( "patches", "casefold.c" ) );
 }

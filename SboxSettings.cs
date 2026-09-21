@@ -4,7 +4,7 @@ using System.Text.Json;
 
 namespace Ampersand;
 
-internal sealed record SboxConfig( string SboxRoot, string? SboxServerGame = null, bool SdlWinFix = false, bool ConfineCapture = false );
+internal sealed record SboxConfig( string SboxRoot, string? SboxServerGame = null, bool SdlWinFix = false, bool ConfineCapture = false, bool Casefold = false );
 
 internal static class SboxSettings
 {
@@ -163,7 +163,17 @@ internal static class SboxSettings
 				confineCapture = cc.GetString() is string cs && ( cs == "1" || cs.Equals( "true", StringComparison.OrdinalIgnoreCase ) );
 		}
 
-		return new SboxConfig( root, serverGame, sdlWinFix, confineCapture );
+		// Optional case-insensitive asset fallback (vendored
+		// apps/patches/casefold.c). Absent key = off.
+		var casefold = false;
+		if ( doc.RootElement.TryGetProperty( "casefold", out var cf ) || doc.RootElement.TryGetProperty( "Casefold", out cf ) )
+		{
+			if ( cf.ValueKind == JsonValueKind.True ) casefold = true;
+			else if ( cf.ValueKind == JsonValueKind.String )
+				casefold = cf.GetString() is string cfs && ( cfs == "1" || cfs.Equals( "true", StringComparison.OrdinalIgnoreCase ) );
+		}
+
+		return new SboxConfig( root, serverGame, sdlWinFix, confineCapture, casefold );
 		}
 		catch { return null; }
 	}
@@ -251,7 +261,7 @@ internal static class SboxSettings
 			var detected = RepoRoot.Find();
 			if ( detected is not null ) root = detected;
 		}
-		Save( root, existing?.SboxServerGame, enabled );
+		Save( root, existing?.SboxServerGame, enabled, existing?.ConfineCapture, existing?.Casefold );
 	}
 
 	public static bool GetConfineCapture()
@@ -268,7 +278,24 @@ internal static class SboxSettings
 			var detected = RepoRoot.Find();
 			if ( detected is not null ) root = detected;
 		}
-		Save( root, existing?.SboxServerGame, existing?.SdlWinFix, enabled );
+		Save( root, existing?.SboxServerGame, existing?.SdlWinFix, enabled, existing?.Casefold );
+	}
+
+	public static bool GetCasefold()
+	{
+		try { return Load()?.Casefold == true; } catch { return false; }
+	}
+
+	public static void SaveCasefold( bool enabled )
+	{
+		var existing = Load();
+		var root = existing?.SboxRoot ?? Resolve() ?? GetStalePersistedPath() ?? "";
+		if ( string.IsNullOrWhiteSpace( root ) )
+		{
+			var detected = RepoRoot.Find();
+			if ( detected is not null ) root = detected;
+		}
+		Save( root, existing?.SboxServerGame, existing?.SdlWinFix, existing?.ConfineCapture, enabled );
 	}
 
 	public static void SaveServerGame( string? serverGame )
@@ -290,29 +317,30 @@ internal static class SboxSettings
 	{
 		// Preserve existing serverGame and shim toggles when only root is being saved (e.g. Resolve migration).
 		var existing = Load();
-		Save( sboxRoot, existing?.SboxServerGame, existing?.SdlWinFix, existing?.ConfineCapture );
+		Save( sboxRoot, existing?.SboxServerGame, existing?.SdlWinFix, existing?.ConfineCapture, existing?.Casefold );
 	}
 
 	public static void Save( string sboxRoot, string? serverGame )
 	{
 		var existing = Load();
-		Save( sboxRoot, serverGame, existing?.SdlWinFix, existing?.ConfineCapture );
+		Save( sboxRoot, serverGame, existing?.SdlWinFix, existing?.ConfineCapture, existing?.Casefold );
 	}
 
-	public static void Save( string sboxRoot, string? serverGame, bool? sdlWinFix, bool? confineCapture = null )
+	public static void Save( string sboxRoot, string? serverGame, bool? sdlWinFix, bool? confineCapture = null, bool? casefold = null )
 	{
 		var norm = Normalize( sboxRoot ) ?? sboxRoot;
 		var normGame = NormalizeServerGame( serverGame );
 		var flag = sdlWinFix ?? Load()?.SdlWinFix ?? false;
 		var ccFlag = confineCapture ?? Load()?.ConfineCapture ?? false;
+		var cfFlag = casefold ?? Load()?.Casefold ?? false;
 		var dir = ConfigDirectory;
 		Directory.CreateDirectory( dir );
 
 		string json;
 		if ( normGame is not null )
-			json = JsonSerializer.Serialize( new { sboxRoot = norm, sboxServerGame = normGame, sdlWinFix = flag, confineCapture = ccFlag }, new JsonSerializerOptions { WriteIndented = true } );
+			json = JsonSerializer.Serialize( new { sboxRoot = norm, sboxServerGame = normGame, sdlWinFix = flag, confineCapture = ccFlag, casefold = cfFlag }, new JsonSerializerOptions { WriteIndented = true } );
 		else
-			json = JsonSerializer.Serialize( new { sboxRoot = norm, sdlWinFix = flag, confineCapture = ccFlag }, new JsonSerializerOptions { WriteIndented = true } );
+			json = JsonSerializer.Serialize( new { sboxRoot = norm, sdlWinFix = flag, confineCapture = ccFlag, casefold = cfFlag }, new JsonSerializerOptions { WriteIndented = true } );
 
 		var tmp = ConfigPath + ".tmp";
 		File.WriteAllText( tmp, json );

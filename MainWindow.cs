@@ -37,6 +37,7 @@ internal sealed class MainWindow : Window
 	private readonly CheckBox systemTerminal;
 	private readonly CheckBox sdlWinFix;
 	private readonly CheckBox confineCapture;
+	private readonly CheckBox casefoldFix;
 
 	private LaunchTarget? selected;
 	private bool updatingCheckbox;
@@ -252,6 +253,33 @@ internal sealed class MainWindow : Window
 			}
 		};
 
+		// Case-insensitive asset fallback for wrong-case references committed
+		// upstream (citizen .vmdl files referencing lowercase FBX paths that
+		// only resolve on case-insensitive filesystems). Same arrangement as
+		// the shims above: global, persisted in settings.json, takes effect
+		// on the next launch. Off by default (opt-in).
+		casefoldFix = new CheckBox
+		{
+			Content = "Casefold",
+			VerticalAlignment = VerticalAlignment.Center,
+			IsChecked = SboxSettings.GetCasefold()
+		};
+		ToolTip.SetTip( casefoldFix, "Case-insensitive fallback for wrong-case asset references:\n"
+			+ "retries failed file opens matching each path component\n"
+			+ "case-insensitively (fixes Linux content builds and asset loads\n"
+			+ "for upstream files with lowercase FBX paths).\n"
+			+ "Takes effect on next launch. Dormant unless ticked.\n"
+			+ "Diagnostics with CASEFOLD_VERBOSE=1." );
+		casefoldFix.IsCheckedChanged += async ( _, _ ) =>
+		{
+			if ( updatingCheckbox ) return;
+			try { SboxSettings.SaveCasefold( casefoldFix.IsChecked == true ); }
+			catch ( Exception e )
+			{
+				await ConfirmDialog.Notify( this, "Could not save settings", e.Message + "\n\nPath: " + SboxSettings.ConfigPath );
+			}
+		};
+
 		var toggles = new StackPanel
 		{
 			Orientation = Orientation.Horizontal,
@@ -263,6 +291,7 @@ internal sealed class MainWindow : Window
 		toggles.Children.Add( steamRuntime );
 		toggles.Children.Add( sdlWinFix );
 		toggles.Children.Add( confineCapture );
+		toggles.Children.Add( casefoldFix );
 
 		statusText = new TextBlock
 		{
@@ -661,6 +690,12 @@ internal sealed class MainWindow : Window
 		if ( !await EnsureConfineCaptureShimAsync( root, target ) )
 			return;
 
+		// Case-insensitive asset fallback shim: same build-on-demand
+		// arrangement. Covers game/editor scripts via _common.sh; sbox-server
+		// is standalone and skips it like the other shims.
+		if ( !await EnsureCasefoldShimAsync( root, target ) )
+			return;
+
 		var env = new Dictionary<string, string>
 		{
 			["SBOX_REPO_ROOT"] = root,
@@ -684,6 +719,12 @@ internal sealed class MainWindow : Window
 		// TEMPORARY XTEST edge-snap (see confineCapture checkbox): same arrangement.
 		if ( confineCapture.IsChecked == true )
 			env["SBOX_XCONFCAPTURE"] = "1";
+		// Case-insensitive asset fallback (see casefoldFix checkbox): same
+		// arrangement. Crosses into the Steam runtime container via --env like
+		// the rest, but the .so itself must resolve inside - prefer host-side
+		// runs when relying on the fallback.
+		if ( casefoldFix.IsChecked == true )
+			env["SBOX_CASEFOLD"] = "1";
 		var command = new List<string>();
 
 		// Held across the await below, not just the spawn: PrepareRuntime can sit
@@ -1028,6 +1069,94 @@ internal sealed class MainWindow : Window
 		{
 			await Fail( target, "gcc not found",
 				"Could not start gcc: " + output + "\n\nInstall gcc and the X11 headers to build the shim, or untick cursor capture." );
+			return false;
+		}
+		if ( exit != 0 || !File.Exists( so ) )
+		{
+			await Fail( target, "Shim build failed", "gcc exited with code " + exit + ":\n\n" + output );
+			return false;
+		}
+		return true;
+	}
+
+	/// The case-insensitive asset fallback needs its helper library built
+	/// (vendored source at apps/patches/casefold.c, built .so in the ampersand
+	/// cache dir - see AppPaths). Same build-on-demand arrangement as the
+	/// shims above; only the game/editor scripts consume _common.sh,
+	/// sbox-server.sh is standalone and never touches the shim.
+	/// </summary>
+	private async Task<bool> EnsureCasefoldShimAsync( string root, LaunchTarget target )
+	{
+		if ( casefoldFix.IsChecked != true || target.ScriptFile == "sbox-server.sh" )
+			return true;
+
+		var so = Environment.GetEnvironmentVariable( "SBOX_CASEFOLD_SO" );
+		if ( string.IsNullOrWhiteSpace( so ) )
+			so = AppPaths.CasefoldLibrary;
+		if ( File.Exists( so ) )
+			return true;
+
+		var build = await ConfirmDialog.Show( this, "Casefold shim missing",
+			"Casefold is enabled, but its helper library has not been built yet:\n"
+				+ so + "\n\nBuild it now? This compiles the vendored shim (apps/patches/casefold.c) with gcc and takes a few seconds.",
+			"Build it", "Cancel launch" );
+		if ( !build )
+		{
+			statusText.Text = target.Name + ": launch cancelled (shim not built)";
+			UpdateStatusBar();
+			return false;
+		}
+
+		var src = AppPaths.FindCasefoldSource();
+		if ( src is null )
+		{
+			await Fail( target, "Shim source missing",
+				"Expected the vendored shim source at scripts/patches/casefold.c next to the built app.\n\nReinstall ampersand, or untick Casefold." );
+			return false;
+		}
+
+		try { Directory.CreateDirectory( Path.GetDirectoryName( so )! ); } catch { }
+
+		statusText.Text = target.Name + ": building casefold shim...";
+		UpdateStatusBar();
+
+		var srcDir = Path.GetDirectoryName( src )!;
+		var srcFile = Path.GetFileName( src );
+		var (exit, output) = await Task.Run( () =>
+		{
+			using var proc = new Process
+			{
+				StartInfo = new ProcessStartInfo
+				{
+					FileName = "gcc",
+					WorkingDirectory = srcDir,
+					UseShellExecute = false,
+					RedirectStandardOutput = true,
+					RedirectStandardError = true
+				}
+			};
+			foreach ( var arg in new[] { "-D_GNU_SOURCE", "-shared", "-fPIC", "-O2", "-o", so, srcFile, "-ldl" } )
+				proc.StartInfo.ArgumentList.Add( arg );
+			try
+			{
+				proc.Start();
+			}
+			catch ( System.ComponentModel.Win32Exception e )
+			{
+				// gcc itself is missing.
+				return (-1, e.Message);
+			}
+			// gcc output is small; drain stdout first, then wait, then stderr.
+			var stdout = proc.StandardOutput.ReadToEnd();
+			proc.WaitForExit();
+			var stderr = proc.StandardError.ReadToEnd();
+			return (proc.ExitCode, (stdout + "\n" + stderr).Trim());
+		} );
+
+		if ( exit == -1 )
+		{
+			await Fail( target, "gcc not found",
+				"Could not start gcc: " + output + "\n\nInstall gcc to build the shim, or untick Casefold." );
 			return false;
 		}
 		if ( exit != 0 || !File.Exists( so ) )

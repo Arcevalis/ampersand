@@ -86,6 +86,30 @@ sbox_exec()
 	LD_LIBRARY_PATH="$NATIVE_DIR${SBOX_STEAMRT4_COMPAT:+:$SBOX_STEAMRT4_COMPAT}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 	export LD_PRELOAD LD_LIBRARY_PATH
 
+	# Case-insensitive asset fallback for wrong-case references committed
+	# upstream (citizen .vmdl files referencing lowercase FBX paths that only
+	# resolve on case-insensitive filesystems). Vendor source at
+	# apps/patches/casefold.c, built into the ampersand cache dir on demand
+	# like the shims below. Opt-in only: SBOX_CASEFOLD=1 arms it (Casefold
+	# toggle, off by default). Override the location with SBOX_CASEFOLD_SO.
+	# Appended after HarfBuzz - HarfBuzz-first ordering is required (see
+	# above); casefold only interposes the open/stat family, so it is order
+	# independent of the shims below. Diagnostics with CASEFOLD_VERBOSE=1.
+	# Note: only --env allowlisted variables cross into the Steam runtime
+	# container while the .so itself must resolve inside - prefer host-side
+	# runs when relying on the fallback.
+	if [ "${SBOX_CASEFOLD:-0}" != "0" ]; then
+		_casefold_so="${SBOX_CASEFOLD_SO:-${XDG_CACHE_HOME:-$HOME/.cache}/sbox-ampersand/libcasefold.so}"
+		if [ ! -f "$_casefold_so" ]; then
+			echo "error: SBOX_CASEFOLD=$SBOX_CASEFOLD but casefold shim missing at $_casefold_so" >&2
+			echo "launch once via Ampersand with Casefold ticked to build it," >&2
+			echo "or build it by hand: gcc -D_GNU_SOURCE -shared -fPIC -O2 -o libcasefold.so casefold.c -ldl" >&2
+			exit 1
+		fi
+		LD_PRELOAD="$LD_PRELOAD:$_casefold_so"
+		export LD_PRELOAD
+	fi
+
 	# TRANSIENT stopgap for the Linux/XWayland foreign-window embedding gap
 	# (Qt never forwards geometry to the embedded SDL window, so SDL's
 	# size/position answers fossilize - ampersand vendors the shim source at
