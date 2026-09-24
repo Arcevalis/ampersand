@@ -193,7 +193,9 @@ Ampersand passes it as `+game <value>`. Empty clears it.
 - **Build S&Box**: runs the engine's `Setup.sh` (git hooks, per-platform
   artifacts, bindings, managed, shaders, content), then Ampersand's own `ldd`
   dependency report over `game/bin/linuxsteamrt64`. Runs in your terminal via
-  `ampersand --bootstrap` (`--skip-deps` skips the report on the CLI).
+  `ampersand --bootstrap` (`--skip-deps` skips the report on the CLI), tee'd to
+  `~/.cache/sbox-ampersand/logs/` like a launch so the build output survives
+  the terminal window.
 - **Check for missing dependencies**: `ldd` sweep of
   `game/bin/linuxsteamrt64` plus the engine's bundled .NET runtime, on the
   **host and inside steamrt4**, plus the steamrt4 compat cache status. Runs via
@@ -205,8 +207,8 @@ Ampersand passes it as `+game <value>`. Empty clears it.
   remote-input consent, releasing the mouse stops all injection. Wired via
   `SBOX_XCONFCAPTURE=1` + `LD_PRELOAD` in `apps/_common.sh`, source vendored
   at `apps/patches/xconfinecapture.c` (built to the cache dir on demand).
-- **Open log folder**: every run is tee'd to `~/.cache/sbox-ampersand/logs/`
-  whether it used a terminal or not. Each log opens with the exact command
+- **Open log folder**: every launch and every build is tee'd to
+  `~/.cache/sbox-ampersand/logs/` whether it used a terminal or not. Each log opens with the exact command
   that was run (`$ cd ...` plus env assignments and argv, shell-quoted) so a
   launch can be reproduced from the log alone. Below the header, the scripts
   narrate themselves (`+ [script:line] command` trace lines via `set -x` in

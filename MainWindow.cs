@@ -1277,8 +1277,41 @@ internal sealed class MainWindow : Window
 			var args = new List<string> { self, Program.BootstrapArgument };
 			if ( skipDeps ) args.Add( "--skip-deps" );
 
-			if ( !SystemTerminal.TryBuild( args, out var argv, out var emulator ) )
+			// Fail fast when no emulator exists so the log below is only created
+			// for runs that actually launch - cancelled or impossible runs must
+			// not leave empty logs behind.
+			if ( SystemTerminal.Detect() is null )
 			{
+				await ConfirmDialog.Notify( this, "No terminal emulator",
+					"Bootstrap prints a coloured build log, so it needs a terminal "
+						+ "window - and no emulator was found on PATH.\n\n"
+						+ "Install one (gnome-terminal, konsole, alacritty, kitty, foot, xterm...), "
+						+ "or run it yourself:\n\n"
+						+ self + " " + Program.BootstrapArgument + ( skipDeps ? " --skip-deps" : "" ) );
+				return;
+			}
+
+			// Same tee as launches (ProcessRunner.StartInTerminal): the terminal
+			// keeps the coloured output, and a copy lands in the log folder with
+			// the exact command in its header. The build worker itself just writes
+			// to stdout/stderr, so no log awareness is needed on that side.
+			var logPath = RunLog.CreateLogPath( "Build S&Box" );
+			RunLog.WriteCommandHeader(
+				logPath,
+				args,
+				root,
+				new Dictionary<string, string>() );
+			var wrapper = RunLog.EnsureWrapper();
+			// wrapper.sh <log> <original command...>
+			var wrapped = new List<string> { wrapper, logPath };
+			wrapped.AddRange( args );
+
+			if ( !SystemTerminal.TryBuild( wrapped, out var argv, out var emulator ) )
+			{
+				// Race-only fallback: Detect() passed above, so the emulator list
+				// changed under us. Remove the just-created log so a run that
+				// never launched leaves nothing behind.
+				try { File.Delete( logPath ); } catch { }
 				await ConfirmDialog.Notify( this, "No terminal emulator",
 					"Bootstrap prints a coloured build log, so it needs a terminal "
 						+ "window - and no emulator was found on PATH.\n\n"
@@ -1299,7 +1332,7 @@ internal sealed class MainWindow : Window
 				info.ArgumentList.Add( argv[i] );
 
 			Process.Start( info );
-			statusText.Text = "bootstrap running in " + emulator;
+			statusText.Text = "bootstrap running in " + emulator + " - log: " + logPath;
 		}
 		catch ( Exception e )
 		{
