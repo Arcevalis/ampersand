@@ -1274,6 +1274,32 @@ internal sealed class MainWindow : Window
 				return;
 			}
 
+			// Freshly downloaded artifacts lose the executable bit, and the
+			// engine only repairs contentbuilder itself - a non-executable
+			// resourcecompiler fails the content step with a bare permission
+			// error. Ask before fixing; declining still builds (any resulting
+			// failure lands in the build log).
+			var nonExec = ToolchainExec.FindNonExecutable( root );
+			if ( nonExec.Count > 0 )
+			{
+				var fix = await ConfirmDialog.Show( this, "Build tools not executable",
+					"The content toolchain is missing the executable bit (fresh downloads lose it):\n"
+						+ string.Join( "\n", nonExec )
+						+ "\n\nMake them executable before building?",
+					"Make executable", "Continue anyway" );
+				if ( fix )
+				{
+					if ( ToolchainExec.TryFix( nonExec ) )
+						statusText.Text = "toolchain: made executable: " + string.Join( ", ", nonExec );
+					else
+						statusText.Text = "toolchain: could not fix all files - see build log";
+				}
+				else
+				{
+					statusText.Text = "toolchain left non-executable per user choice";
+				}
+			}
+
 			var args = new List<string> { self, Program.BootstrapArgument };
 			if ( skipDeps ) args.Add( "--skip-deps" );
 

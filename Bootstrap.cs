@@ -44,6 +44,20 @@ internal static class Bootstrap
 			return;
 		}
 
+		// --- toolchain exec bits (fresh downloads lose them) ------------------
+		// The GUI prompts before launching; this silent re-check covers direct
+		// `ampersand --bootstrap` runs and repairs with a log trail instead of
+		// a second question. The engine only fixes contentbuilder itself, so
+		// resourcecompiler needs us here.
+		var nonExec = ToolchainExec.FindNonExecutable( repoRoot );
+		if ( nonExec.Count > 0 )
+		{
+			emit( Ansi.Dim + "  toolchain: restoring exec bit on " + string.Join( ", ", nonExec ) + Ansi.Reset );
+			if ( !ToolchainExec.TryFix( nonExec, emit ) )
+				emit( Ansi.Yellow + "  toolchain: some files could not be fixed - the content step may fail" + Ansi.Reset );
+			emit( "" );
+		}
+
 		// --- engine setup (heavy lifting lives here) --------------------------
 		emit( Ansi.Bold + Ansi.Cyan + "--- sh Setup.sh ---" + Ansi.NoBold + Ansi.Reset );
 		// Case-insensitive asset fallback (opt-in Casefold toggle): export it

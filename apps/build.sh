@@ -52,5 +52,11 @@ case "${1:-}" in
 		exit 0 ;;
 esac
 
+# Freshly downloaded artifacts lose the executable bit, and the engine only
+# repairs contentbuilder itself - restore both toolchain bits best-effort so
+# the content step can spawn resourcecompiler. Silent on purpose (missing
+# files just mean Setup.sh hasn't downloaded them yet); never fails the build.
+chmod +x "$ROOT/game/bin/linuxsteamrt64/contentbuilder" "$ROOT/game/bin/linuxsteamrt64/resourcecompiler" 2>/dev/null || true
+
 cd -- "$ROOT"
 exec sh Setup.sh "$@"
