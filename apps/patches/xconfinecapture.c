@@ -1,4 +1,8 @@
-// libxconfinecapture - TEMPORARY scene-view edge-snap for XWayland.
+// libxconfinecapture - RETIRED, reference only; nothing preloads this.
+// Arming it froze the editor after F8 into GameMode. The XTEST snap now lives
+// in managed code (sbox-public engine/Sandbox.Tools/Qt/X11TestAssist.cs).
+//
+// Original header preserved below - TEMPORARY scene-view edge-snap for XWayland.
 //
 // The editor warps the cursor edge-to-edge mid-drag (LockCursorToCanvas),
 // but on XWayland plain warps never land mid-drag: the Wayland implicit

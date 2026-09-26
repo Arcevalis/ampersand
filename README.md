@@ -201,12 +201,9 @@ Ampersand passes it as `+game <value>`. Empty clears it.
   **host and inside steamrt4**, plus the steamrt4 compat cache status. Runs via
   `ampersand --dependency-check`. (Host-clean but container-broken is the
   classic trap. This checks both.)
-- **Cursor capture (temporary):** XTEST edge-snap for scene-view camera drags
-  on XWayland, until Facepunch fixes cursor capture natively (then this goes
-  away). Opt-in checkbox, takes effect on next launch; first drag asks for
-  remote-input consent, releasing the mouse stops all injection. Wired via
-  `SBOX_XCONFCAPTURE=1` + `LD_PRELOAD` in `apps/_common.sh`, source vendored
-  at `apps/patches/xconfinecapture.c` (built to the cache dir on demand).
+- **Cursor capture (retired):** the XTEST LD_PRELOAD shim froze the editor and
+  is gone; the snap lives in managed code (`X11TestAssist`). Source retained
+  at `apps/patches/xconfinecapture.c` for reference only.
 - **Open log folder**: every launch and every build is tee'd to
   `~/.cache/sbox-ampersand/logs/` whether it used a terminal or not. Each log opens with the exact command
   that was run (`$ cd ...` plus env assignments and argv, shell-quoted) so a
@@ -264,7 +261,7 @@ DependencyCheck.cs      # host + container ldd sweep + shim report
 SboxSettings.cs         # persisted s&box path + server game (~/.local/share/…)
 RepoRoot.cs / AppPaths.cs / RunLog.cs / Ansi.cs / TerminalTheme.cs …
 apps/                   # launch scripts (sbox.sh, sbox-dev.sh, sbox-server.sh, build.sh, _common.sh)
-apps/patches/           # vendored shim sources (sdlwinfix.c, xconfinecapture.c; built to the ampersand cache dir on demand)
+apps/patches/           # vendored shim sources (casefold.c; built to the ampersand cache dir on demand)
 assets/                 # ampersand.desktop, AppRun, ampersand.png (logo)
 install-appimage.sh       # publish → AppDir → AppImage → install
 uninstall.sh              # remove an install (AppImage, entry, icon, menu pin)

@@ -35,8 +35,6 @@ internal sealed class MainWindow : Window
 	private readonly Border sboxServerGamePanel;
 	private readonly CheckBox steamRuntime;
 	private readonly CheckBox systemTerminal;
-	private readonly CheckBox sdlWinFix;
-	private readonly CheckBox confineCapture;
 	private readonly CheckBox casefoldFix;
 
 	private LaunchTarget? selected;
@@ -201,58 +199,6 @@ internal sealed class MainWindow : Window
 				selected.UseSystemTerminal = systemTerminal.IsChecked == true;
 		};
 
-		// TRANSIENT stopgap toggle for the Linux/XWayland SDL embedding gap
-		// (frozen play-viewport size, offset menu clicks). Global, persisted in
-		// settings.json, takes effect on the next launch. Delete apps/patches/
-		// with the toggle once Facepunch fixes it natively.
-		sdlWinFix = new CheckBox
-		{
-			Content = "SDL embed fix",
-			VerticalAlignment = VerticalAlignment.Center,
-			IsChecked = SboxSettings.GetSdlWinFix()
-		};
-		ToolTip.SetTip( sdlWinFix, "TRANSIENT stopgap until Facepunch fixes the native embedding.\n"
-			+ "Reports the live play-widget geometry to SDL (fixes fullscreen menu size\n"
-			+ "and offset clicks in editor play mode on Linux/XWayland).\n"
-			+ "Takes effect on next launch. Observe-only topology logging stays env-only:\n"
-			+ "SBOX_SDLWINFIX=observe." );
-		sdlWinFix.IsCheckedChanged += async ( _, _ ) =>
-		{
-			if ( updatingCheckbox ) return;
-			try { SboxSettings.SaveSdlWinFix( sdlWinFix.IsChecked == true ); }
-			catch ( Exception e )
-			{
-				await ConfirmDialog.Notify( this, "Could not save settings", e.Message + "\n\nPath: " + SboxSettings.ConfigPath );
-			}
-		};
-
-		// TEMPORARY XTEST edge-snap for the scene-view cursor gap on XWayland
-		// (cursor never snaps edge to edge mid-drag). Remove once Facepunch
-		// fixes cursor capture natively. Same arrangement as the SDL embed
-		// fix above: global, persisted in settings.json, takes effect on
-		// the next launch.
-		confineCapture = new CheckBox
-		{
-			Content = "Cursor capture",
-			VerticalAlignment = VerticalAlignment.Center,
-			IsChecked = SboxSettings.GetConfineCapture()
-		};
-		ToolTip.SetTip( confineCapture, "TEMPORARY XTEST edge-snap for scene-view camera drags:\n"
-			+ "re-issues each drag wrap as fake device motion so the cursor\n"
-			+ "visibly snaps edge to edge on Linux/XWayland. First use asks\n"
-			+ "for remote-input consent; releasing the mouse stops it.\n"
-			+ "Takes effect on next launch. Dormant unless ticked.\n"
-			+ "Remove once Facepunch fixes cursor capture natively." );
-		confineCapture.IsCheckedChanged += async ( _, _ ) =>
-		{
-			if ( updatingCheckbox ) return;
-			try { SboxSettings.SaveConfineCapture( confineCapture.IsChecked == true ); }
-			catch ( Exception e )
-			{
-				await ConfirmDialog.Notify( this, "Could not save settings", e.Message + "\n\nPath: " + SboxSettings.ConfigPath );
-			}
-		};
-
 		// Case-insensitive asset fallback for wrong-case references committed
 		// upstream (citizen .vmdl files referencing lowercase FBX paths that
 		// only resolve on case-insensitive filesystems). Same arrangement as
@@ -289,8 +235,6 @@ internal sealed class MainWindow : Window
 		};
 		toggles.Children.Add( systemTerminal );
 		toggles.Children.Add( steamRuntime );
-		toggles.Children.Add( sdlWinFix );
-		toggles.Children.Add( confineCapture );
 		toggles.Children.Add( casefoldFix );
 
 		statusText = new TextBlock
@@ -681,15 +625,6 @@ internal sealed class MainWindow : Window
 			return;
 		}
 
-		// SDL embed fix shim: offer to build it now rather than failing inside
-		// the launch scripts when it is missing.
-		if ( !await EnsureSdlWinFixShimAsync( root, target ) )
-			return;
-
-		// Pointer-capture shim: same build-on-demand arrangement.
-		if ( !await EnsureConfineCaptureShimAsync( root, target ) )
-			return;
-
 		// Case-insensitive asset fallback shim: same build-on-demand
 		// arrangement. Covers game/editor scripts via _common.sh; sbox-server
 		// is standalone and skips it like the other shims.
@@ -712,19 +647,17 @@ internal sealed class MainWindow : Window
 			// SDL_VIDEODRIVER). Same --env crossing as above.
 			["SDL_VIDEO_DRIVER"] = "x11"
 		};
-		// TRANSIENT SDL embed fix (see sdlWinFix checkbox): persisted toggle,
-		// read live so it applies to this launch. Same --env crossing as above.
-		if ( sdlWinFix.IsChecked == true )
-			env["SBOX_SDLWINFIX"] = "1";
-		// TEMPORARY XTEST edge-snap (see confineCapture checkbox): same arrangement.
-		if ( confineCapture.IsChecked == true )
-			env["SBOX_XCONFCAPTURE"] = "1";
 		// Case-insensitive asset fallback (see casefoldFix checkbox): same
 		// arrangement. Crosses into the Steam runtime container via --env like
 		// the rest, but the .so itself must resolve inside - prefer host-side
 		// runs when relying on the fallback.
 		if ( casefoldFix.IsChecked == true )
 			env["SBOX_CASEFOLD"] = "1";
+		// Input diagnostics: forward SBOX_INPUT_DEBUG when set in our own
+		// environment (unset = silent). Crosses into the container via --env.
+		var inputDebug = Environment.GetEnvironmentVariable( "SBOX_INPUT_DEBUG" );
+		if ( !string.IsNullOrEmpty( inputDebug ) )
+			env["SBOX_INPUT_DEBUG"] = inputDebug;
 		var command = new List<string>();
 
 		// Held across the await below, not just the spawn: PrepareRuntime can sit
@@ -901,183 +834,21 @@ internal sealed class MainWindow : Window
 		return true;
 	}
 
-	/// The SDL embed fix needs its helper library built (vendored source at
-	/// apps/patches/sdlwinfix.c, built .so in the ampersand cache dir - see
-	/// AppPaths). The launch scripts hard-fail when the fix is enabled but
-	/// the library is missing, so offer to build it here with a modal instead of
-	/// failing later inside the terminal. Only the game/editor scripts consume
-	/// _common.sh; sbox-server.sh is standalone and never touches the shim.
+	/// <summary>
+	/// True when the built shim library exists and is newer than its source,
+	/// so a source edit rebuilds instead of silently shipping a stale .so.
 	/// </summary>
-	private async Task<bool> EnsureSdlWinFixShimAsync( string root, LaunchTarget target )
+	private static bool ShimUpToDate( string? src, string? so )
 	{
-		if ( sdlWinFix.IsChecked != true || target.ScriptFile == "sbox-server.sh" )
-			return true;
-
-		var so = Environment.GetEnvironmentVariable( "SBOX_SDLWINFIX_SO" );
-		if ( string.IsNullOrWhiteSpace( so ) )
-			so = AppPaths.SdlWinFixLibrary;
-		if ( File.Exists( so ) )
-			return true;
-
-		var build = await ConfirmDialog.Show( this, "SDL embed fix shim missing",
-			"The SDL embed fix is enabled, but its helper library has not been built yet:\n"
-				+ so + "\n\nBuild it now? This compiles the vendored shim (apps/patches/sdlwinfix.c) with gcc and takes a few seconds.",
-			"Build it", "Cancel launch" );
-		if ( !build )
+		try
 		{
-			statusText.Text = target.Name + ": launch cancelled (shim not built)";
-			UpdateStatusBar();
-			return false;
+			if ( string.IsNullOrEmpty( src ) || string.IsNullOrEmpty( so ) ) return false;
+			if ( !File.Exists( so ) ) return false;
+			return File.GetLastWriteTimeUtc( so ) >= File.GetLastWriteTimeUtc( src );
 		}
-
-		var src = AppPaths.FindSdlWinFixSource();
-		if ( src is null )
-		{
-			await Fail( target, "Shim source missing",
-				"Expected the vendored shim source at scripts/patches/sdlwinfix.c next to the built app.\n\nReinstall ampersand, or untick the SDL embed fix." );
-			return false;
-		}
-
-		try { Directory.CreateDirectory( Path.GetDirectoryName( so )! ); } catch { }
-
-		statusText.Text = target.Name + ": building sdlwinfix shim...";
-		UpdateStatusBar();
-
-		var srcDir = Path.GetDirectoryName( src )!;
-		var srcFile = Path.GetFileName( src );
-		var (exit, output) = await Task.Run( () =>
-		{
-			using var proc = new Process
-			{
-				StartInfo = new ProcessStartInfo
-				{
-					FileName = "gcc",
-					WorkingDirectory = srcDir,
-					UseShellExecute = false,
-					RedirectStandardOutput = true,
-					RedirectStandardError = true
-				}
-			};
-			foreach ( var arg in new[] { "-D_GNU_SOURCE", "-shared", "-fPIC", "-O1", "-o", so, srcFile, "-ldl", "-lX11" } )
-				proc.StartInfo.ArgumentList.Add( arg );
-			try
-			{
-				proc.Start();
-			}
-			catch ( System.ComponentModel.Win32Exception e )
-			{
-				// gcc itself is missing.
-				return (-1, e.Message);
-			}
-			// gcc output is small; drain stdout first, then wait, then stderr.
-			var stdout = proc.StandardOutput.ReadToEnd();
-			proc.WaitForExit();
-			var stderr = proc.StandardError.ReadToEnd();
-			return (proc.ExitCode, (stdout + "\n" + stderr).Trim());
-		} );
-
-		if ( exit == -1 )
-		{
-			await Fail( target, "gcc not found",
-				"Could not start gcc: " + output + "\n\nInstall gcc and the X11 headers to build the shim, or untick the SDL embed fix." );
-			return false;
-		}
-		if ( exit != 0 || !File.Exists( so ) )
-		{
-			await Fail( target, "Shim build failed", "gcc exited with code " + exit + ":\n\n" + output );
-			return false;
-		}
-		return true;
+		catch { return false; }
 	}
 
-	/// The TEMPORARY XTEST edge-snap needs its helper library built (vendored
-	/// source at apps/patches/xconfinecapture.c, built .so in the ampersand
-	/// cache dir - see AppPaths). Same build-on-demand arrangement as the SDL
-	/// embed fix above; only the game/editor scripts consume _common.sh,
-	/// sbox-server.sh is standalone and never touches the shim. Remove with
-	/// the shim once Facepunch fixes cursor capture natively.
-	/// </summary>
-	private async Task<bool> EnsureConfineCaptureShimAsync( string root, LaunchTarget target )
-	{
-		if ( confineCapture.IsChecked != true || target.ScriptFile == "sbox-server.sh" )
-			return true;
-
-		var so = Environment.GetEnvironmentVariable( "SBOX_XCONFCAPTURE_SO" );
-		if ( string.IsNullOrWhiteSpace( so ) )
-			so = AppPaths.ConfineCaptureLibrary;
-		if ( File.Exists( so ) )
-			return true;
-
-		var build = await ConfirmDialog.Show( this, "Cursor capture shim missing",
-			"Cursor capture is enabled, but its helper library has not been built yet:\n"
-				+ so + "\n\nBuild it now? This compiles the vendored shim (apps/patches/xconfinecapture.c) with gcc and takes a few seconds.",
-			"Build it", "Cancel launch" );
-		if ( !build )
-		{
-			statusText.Text = target.Name + ": launch cancelled (shim not built)";
-			UpdateStatusBar();
-			return false;
-		}
-
-		var src = AppPaths.FindConfineCaptureSource();
-		if ( src is null )
-		{
-			await Fail( target, "Shim source missing",
-				"Expected the vendored shim source at scripts/patches/xconfinecapture.c next to the built app.\n\nReinstall ampersand, or untick cursor capture." );
-			return false;
-		}
-
-		try { Directory.CreateDirectory( Path.GetDirectoryName( so )! ); } catch { }
-
-		statusText.Text = target.Name + ": building cursor capture shim...";
-		UpdateStatusBar();
-
-		var srcDir = Path.GetDirectoryName( src )!;
-		var srcFile = Path.GetFileName( src );
-		var (exit, output) = await Task.Run( () =>
-		{
-			using var proc = new Process
-			{
-				StartInfo = new ProcessStartInfo
-				{
-					FileName = "gcc",
-					WorkingDirectory = srcDir,
-					UseShellExecute = false,
-					RedirectStandardOutput = true,
-					RedirectStandardError = true
-				}
-			};
-			foreach ( var arg in new[] { "-D_GNU_SOURCE", "-shared", "-fPIC", "-O1", "-o", so, srcFile, "-ldl" } )
-				proc.StartInfo.ArgumentList.Add( arg );
-			try
-			{
-				proc.Start();
-			}
-			catch ( System.ComponentModel.Win32Exception e )
-			{
-				// gcc itself is missing.
-				return (-1, e.Message);
-			}
-			// gcc output is small; drain stdout first, then wait, then stderr.
-			var stdout = proc.StandardOutput.ReadToEnd();
-			proc.WaitForExit();
-			var stderr = proc.StandardError.ReadToEnd();
-			return (proc.ExitCode, (stdout + "\n" + stderr).Trim());
-		} );
-
-		if ( exit == -1 )
-		{
-			await Fail( target, "gcc not found",
-				"Could not start gcc: " + output + "\n\nInstall gcc and the X11 headers to build the shim, or untick cursor capture." );
-			return false;
-		}
-		if ( exit != 0 || !File.Exists( so ) )
-		{
-			await Fail( target, "Shim build failed", "gcc exited with code " + exit + ":\n\n" + output );
-			return false;
-		}
-		return true;
-	}
 
 	/// The case-insensitive asset fallback needs its helper library built
 	/// (vendored source at apps/patches/casefold.c, built .so in the ampersand
@@ -1093,25 +864,22 @@ internal sealed class MainWindow : Window
 		var so = Environment.GetEnvironmentVariable( "SBOX_CASEFOLD_SO" );
 		if ( string.IsNullOrWhiteSpace( so ) )
 			so = AppPaths.CasefoldLibrary;
-		if ( File.Exists( so ) )
+		var src = AppPaths.FindCasefoldSource();
+		if ( src is null )
+		{
+			return File.Exists( so );
+		}
+		if ( ShimUpToDate( src, so ) )
 			return true;
 
-		var build = await ConfirmDialog.Show( this, "Casefold shim missing",
-			"Casefold is enabled, but its helper library has not been built yet:\n"
+		var build = await ConfirmDialog.Show( this, "Casefold shim missing or out of date",
+			"Casefold is enabled, but its helper library is missing or older than its source:\n"
 				+ so + "\n\nBuild it now? This compiles the vendored shim (apps/patches/casefold.c) with gcc and takes a few seconds.",
 			"Build it", "Cancel launch" );
 		if ( !build )
 		{
 			statusText.Text = target.Name + ": launch cancelled (shim not built)";
 			UpdateStatusBar();
-			return false;
-		}
-
-		var src = AppPaths.FindCasefoldSource();
-		if ( src is null )
-		{
-			await Fail( target, "Shim source missing",
-				"Expected the vendored shim source at scripts/patches/casefold.c next to the built app.\n\nReinstall ampersand, or untick Casefold." );
 			return false;
 		}
 
