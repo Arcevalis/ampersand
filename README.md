@@ -182,6 +182,12 @@ Per-target toggles:
   on; it's the only way to see engine output). Off runs headless with output
   captured to the log file.
 
+Global toggles (persisted in settings, take effect on next launch):
+
+- **Casefold**: case-insensitive fallback for wrong-case asset references.
+- **Input debug**: engine input diagnostics (`SBOX_INPUT_DEBUG`), so the flag
+  no longer has to be in Ampersand's own environment at startup.
+
 ### Dedicated server game
 
 When `sbox-server` is selected, a **DEDICATED SERVER GAME** field appears.

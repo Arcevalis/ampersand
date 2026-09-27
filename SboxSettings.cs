@@ -4,7 +4,7 @@ using System.Text.Json;
 
 namespace Ampersand;
 
-internal sealed record SboxConfig( string SboxRoot, string? SboxServerGame = null, bool Casefold = false );
+internal sealed record SboxConfig( string SboxRoot, string? SboxServerGame = null, bool Casefold = false, bool InputDebug = false );
 
 internal static class SboxSettings
 {
@@ -151,7 +151,16 @@ internal static class SboxSettings
 				casefold = cf.GetString() is string cfs && ( cfs == "1" || cfs.Equals( "true", StringComparison.OrdinalIgnoreCase ) );
 		}
 
-		return new SboxConfig( root, serverGame, casefold );
+		// Optional engine input diagnostics (SBOX_INPUT_DEBUG). Absent key = off.
+		var inputDebug = false;
+		if ( doc.RootElement.TryGetProperty( "inputDebug", out var id ) || doc.RootElement.TryGetProperty( "InputDebug", out id ) )
+		{
+			if ( id.ValueKind == JsonValueKind.True ) inputDebug = true;
+			else if ( id.ValueKind == JsonValueKind.String )
+				inputDebug = id.GetString() is string ids && ( ids == "1" || ids.Equals( "true", StringComparison.OrdinalIgnoreCase ) );
+		}
+
+		return new SboxConfig( root, serverGame, casefold, inputDebug );
 		}
 		catch { return null; }
 	}
@@ -230,6 +239,11 @@ internal static class SboxSettings
 		try { return Load()?.Casefold == true; } catch { return false; }
 	}
 
+	public static bool GetInputDebug()
+	{
+		try { return Load()?.InputDebug == true; } catch { return false; }
+	}
+
 	public static void SaveCasefold( bool enabled )
 	{
 		var existing = Load();
@@ -239,7 +253,19 @@ internal static class SboxSettings
 			var detected = RepoRoot.Find();
 			if ( detected is not null ) root = detected;
 		}
-		Save( root, existing?.SboxServerGame, existing?.Casefold );
+		Save( root, existing?.SboxServerGame, enabled, existing?.InputDebug );
+	}
+
+	public static void SaveInputDebug( bool enabled )
+	{
+		var existing = Load();
+		var root = existing?.SboxRoot ?? Resolve() ?? GetStalePersistedPath() ?? "";
+		if ( string.IsNullOrWhiteSpace( root ) )
+		{
+			var detected = RepoRoot.Find();
+			if ( detected is not null ) root = detected;
+		}
+		Save( root, existing?.SboxServerGame, existing?.Casefold, enabled );
 	}
 
 	public static void SaveServerGame( string? serverGame )
@@ -259,30 +285,31 @@ internal static class SboxSettings
 
 	public static void Save( string sboxRoot )
 	{
-		// Preserve existing serverGame and shim toggles when only root is being saved (e.g. Resolve migration).
+		// Preserve existing serverGame and toggles when only root is being saved (e.g. Resolve migration).
 		var existing = Load();
-		Save( sboxRoot, existing?.SboxServerGame, existing?.Casefold );
+		Save( sboxRoot, existing?.SboxServerGame, existing?.Casefold, existing?.InputDebug );
 	}
 
 	public static void Save( string sboxRoot, string? serverGame )
 	{
 		var existing = Load();
-		Save( sboxRoot, serverGame, existing?.Casefold );
+		Save( sboxRoot, serverGame, existing?.Casefold, existing?.InputDebug );
 	}
 
-	public static void Save( string sboxRoot, string? serverGame, bool? casefold = null )
+	public static void Save( string sboxRoot, string? serverGame, bool? casefold = null, bool? inputDebug = null )
 	{
 		var norm = Normalize( sboxRoot ) ?? sboxRoot;
 		var normGame = NormalizeServerGame( serverGame );
 		var cfFlag = casefold ?? Load()?.Casefold ?? false;
+		var idFlag = inputDebug ?? Load()?.InputDebug ?? false;
 		var dir = ConfigDirectory;
 		Directory.CreateDirectory( dir );
 
 		string json;
 		if ( normGame is not null )
-			json = JsonSerializer.Serialize( new { sboxRoot = norm, sboxServerGame = normGame, casefold = cfFlag }, new JsonSerializerOptions { WriteIndented = true } );
+			json = JsonSerializer.Serialize( new { sboxRoot = norm, sboxServerGame = normGame, casefold = cfFlag, inputDebug = idFlag }, new JsonSerializerOptions { WriteIndented = true } );
 		else
-			json = JsonSerializer.Serialize( new { sboxRoot = norm, casefold = cfFlag }, new JsonSerializerOptions { WriteIndented = true } );
+			json = JsonSerializer.Serialize( new { sboxRoot = norm, casefold = cfFlag, inputDebug = idFlag }, new JsonSerializerOptions { WriteIndented = true } );
 
 		var tmp = ConfigPath + ".tmp";
 		File.WriteAllText( tmp, json );

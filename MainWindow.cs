@@ -36,6 +36,7 @@ internal sealed class MainWindow : Window
 	private readonly CheckBox steamRuntime;
 	private readonly CheckBox systemTerminal;
 	private readonly CheckBox casefoldFix;
+	private readonly CheckBox inputDebug;
 
 	private LaunchTarget? selected;
 	private bool updatingCheckbox;
@@ -226,6 +227,30 @@ internal sealed class MainWindow : Window
 			}
 		};
 
+		// Engine input diagnostics (SBOX_INPUT_DEBUG): persisted toggle so the
+		// flag no longer has to be in our own environment at startup. Global,
+		// persisted in settings.json, takes effect on the next launch.
+		inputDebug = new CheckBox
+		{
+			Content = "Input debug",
+			VerticalAlignment = VerticalAlignment.Center,
+			IsChecked = SboxSettings.GetInputDebug()
+				|| !string.IsNullOrEmpty( Environment.GetEnvironmentVariable( "SBOX_INPUT_DEBUG" ) )
+		};
+		ToolTip.SetTip( inputDebug, "Engine input diagnostics (SBOX_INPUT_DEBUG):\n"
+			+ "verbose logging of the input path in the engine.\n"
+			+ "Takes effect on next launch. Dormant unless ticked.\n"
+			+ "Starting ampersand with SBOX_INPUT_DEBUG set also ticks this." );
+		inputDebug.IsCheckedChanged += async ( _, _ ) =>
+		{
+			if ( updatingCheckbox ) return;
+			try { SboxSettings.SaveInputDebug( inputDebug.IsChecked == true ); }
+			catch ( Exception e )
+			{
+				await ConfirmDialog.Notify( this, "Could not save settings", e.Message + "\n\nPath: " + SboxSettings.ConfigPath );
+			}
+		};
+
 		var toggles = new StackPanel
 		{
 			Orientation = Orientation.Horizontal,
@@ -236,6 +261,7 @@ internal sealed class MainWindow : Window
 		toggles.Children.Add( systemTerminal );
 		toggles.Children.Add( steamRuntime );
 		toggles.Children.Add( casefoldFix );
+		toggles.Children.Add( inputDebug );
 
 		statusText = new TextBlock
 		{
@@ -653,11 +679,19 @@ internal sealed class MainWindow : Window
 		// runs when relying on the fallback.
 		if ( casefoldFix.IsChecked == true )
 			env["SBOX_CASEFOLD"] = "1";
-		// Input diagnostics: forward SBOX_INPUT_DEBUG when set in our own
-		// environment (unset = silent). Crosses into the container via --env.
-		var inputDebug = Environment.GetEnvironmentVariable( "SBOX_INPUT_DEBUG" );
-		if ( !string.IsNullOrEmpty( inputDebug ) )
-			env["SBOX_INPUT_DEBUG"] = inputDebug;
+		// Engine input diagnostics (see inputDebug checkbox): the toggle sets
+		// SBOX_INPUT_DEBUG=1 (the engine treats any non-empty value as on).
+		// With the toggle off, an ambient value from our own environment is
+		// still forwarded, so launching ampersand with the flag set keeps
+		// working. Crosses into the container via --env.
+		if ( inputDebug.IsChecked == true )
+			env["SBOX_INPUT_DEBUG"] = "1";
+		else
+		{
+			var ambientInputDebug = Environment.GetEnvironmentVariable( "SBOX_INPUT_DEBUG" );
+			if ( !string.IsNullOrEmpty( ambientInputDebug ) )
+				env["SBOX_INPUT_DEBUG"] = ambientInputDebug;
+		}
 		var command = new List<string>();
 
 		// Held across the await below, not just the spawn: PrepareRuntime can sit
