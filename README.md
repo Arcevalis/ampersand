@@ -16,8 +16,8 @@
 Ampersand is a small desktop launcher for running [s&amp;box](https://sbox.game)
 from source on Linux. The engine ships as prebuilt natives plus managed code,
 needs a handful of host libraries, and behaves best inside Valve's
-**Steam Linux Runtime 4.0 (steamrt4)** container. Ampersand wraps all of that
-behind a single window with a ▶ button per target.
+**Steam Linux Runtime 4.0 (steamrt4)** container. Ampersand wraps all of this
+behind a single window.
 
 It can:
 
@@ -43,7 +43,7 @@ spawns yours and gets out of the way.
 
 | Requirement | Notes |
 |---|---|
-| Linux x86_64 | Primary target. Wayland works (Qt is forced to `xcb`/XWayland, SDL to the `x11` driver). Scene-view edge-snap needs the temporary **Cursor capture** toggle (XTEST fake motion; first use asks for remote-input consent). |
+| Linux x86_64 | Primary target. Wayland works (Qt is forced to `xcb`/XWayland, SDL to the `x11` driver). |
 | s&amp;box source checkout | A folder containing `game/` + `engine/` with `game/sbox` built. |
 | .NET 10 SDK | Only to *build* Ampersand. Not needed to *run* the AppImage. |
 | Steam + Steam Linux Runtime 4.0 (steamrt4) | Only for containerised launches / container dependency sweep. Install via `steam steam://install/4183110`. Steam must be running. |
@@ -62,11 +62,7 @@ No `dotnet` needed at runtime: the default build is self-contained
 (~37 MB download). It also installs itself: the AppImage is copied to
 `~/Applications/`, a menu entry goes to
 `~/.local/share/applications/Ampersand.desktop` and the icon to
-`~/.local/share/icons/`. The menu entry runs in a terminal
-(`Terminal=true`), so no extra launcher is needed. Paths are XDG-standard
-so non-KDE desktops (GNOME, XFCE and similar) work too; the menu-layout
-fix only runs where a KDE layout exists. On first launch, point
-it at your s&amp;box checkout when asked.
+`~/.local/share/icons/`.
 
 ### Option B: dev build
 
@@ -94,8 +90,7 @@ dotnet run -c Release
 
 ### AppImage
 
-`install-appimage.sh` publishes Ampersand and packs it with `appimagetool`,
-following the same shape as the UZDoom AppImage script (download tool if
+`install-appimage.sh` publishes Ampersand and packs it with `appimagetool`, (download tool if
 missing → prepare AppDir → populate `usr/` tree → repack → clean up):
 
 ```sh
@@ -132,23 +127,11 @@ Examples:
 ```
 
 To remove an installed AppImage again (installed file, menu entry, icon
-and Development menu pinning; build outputs in the source dir are kept):
+and Development menu pinning):
 
 ```sh
 ./uninstall.sh
 ```
-
-Inside the AppImage the layout is:
-
-```
-usr/bin/ampersand            # published .NET binary (single file when self-contained)
-usr/bin/scripts/*.sh         # editable launch scripts (sbox.sh, sbox-dev.sh, sbox-server.sh, …)
-ampersand.desktop            # desktop entry (also under usr/share/applications/)
-ampersand.png                # icon (also under usr/share/icons/… and .DirIcon)
-AppRun                       # mount-point resolver → execs usr/bin/ampersand
-```
-
-The logo file [`assets/ampersand.png`](assets/ampersand.png) feeds the README header, the desktop entry and the AppImage icon.
 
 ## Usage
 
@@ -165,19 +148,19 @@ the **S&BOX LOCATION** field in the sidebar (Enter or click away to apply,
 | Row | Script | What it starts |
 |---|---|---|
 | Client (sbox) | `sbox.sh` | The game client |
-| Editor (sbox-dev) | `sbox-dev.sh` | The editor (no `-project` opens the project menu) |
+| Editor (sbox-dev) | `sbox-dev.sh` | The editor (no `-project` opens the sbox launcher) |
 | Dedicated Server (sbox-server) | `sbox-server.sh` | Headless server, needs `+game <ident\|/path/to.sbproj>` |
 
-Select a row, set the toggles, hit **▶**. Each target runs independently and
-shows `● running` / `exited N` in its row; non-zero exits pop up the log tail.
+Point to your S&box repo (sbox-public), Select a row, 
+set the toggles, hit play.
 **Stop** kills a background run (for terminal runs it closes the window;
 emulators that fork can't always take the engine with them).
+Crashes will show a dialog to help you debug.
 
 Per-target toggles:
 
 - **Launch in Steam Runtime**: enter the steamrt4 container via Steam's own
-  launcher service (Steam must be running). Forced on/off by the script's
-  `# ampersand: runtime=always|never` header where applicable.
+  launcher service (Steam must be running).
 - **Launch with system terminal**: open your emulator for this run (default
   on; it's the only way to see engine output). Off runs headless with output
   captured to the log file.
@@ -191,8 +174,8 @@ Global toggles (persisted in settings, take effect on next launch):
 ### Dedicated server game
 
 When `sbox-server` is selected, a **DEDICATED SERVER GAME** field appears.
-Enter a package ident (`fss.bloodsigil`) or browse for a `.sbproj`;
-Ampersand passes it as `+game <value>`. Empty clears it.
+Enter a package ident (`fss.causal`) or browse for a local `.sbproj`;
+Ampersand passes it as `+game <value>`.
 
 ### Tools (sidebar)
 
@@ -207,9 +190,6 @@ Ampersand passes it as `+game <value>`. Empty clears it.
   **host and inside steamrt4**, plus the steamrt4 compat cache status. Runs via
   `ampersand --dependency-check`. (Host-clean but container-broken is the
   classic trap. This checks both.)
-- **Cursor capture (retired):** the XTEST LD_PRELOAD shim froze the editor and
-  is gone; the snap lives in managed code (`X11TestAssist`). Source retained
-  at `apps/patches/xconfinecapture.c` for reference only.
 - **Open log folder**: every launch and every build is tee'd to
   `~/.cache/sbox-ampersand/logs/` whether it used a terminal or not. Each log opens with the exact command
   that was run (`$ cd ...` plus env assignments and argv, shell-quoted) so a
@@ -283,7 +263,5 @@ bootstrap.sh            # dev build shortcut (dotnet build -c Release)
 | `Steam is not running` | Container entry goes through Steam's launcher service. Start the client first. |
 | `HRESULT: 0x80008088` | Missing `libunwind` inside steamrt4. Run **Check for missing dependencies** and do one containerised launch to seed the shim cache. |
 | `No terminal emulator found` | Install one (`gnome-terminal`, `konsole`, `alacritty`, `kitty`, `foot`, `xterm`), or untick *Launch with system terminal* to run headless with log capture. |
-| `_exe not found (run Build S&Box first)` | The engine isn't built yet. Use **Build S&Box**. |
 | AppImage won't run (`fuse` errors) | Install `fuse2`/`libfuse2`, or extract once: `./Ampersand-x86_64.AppImage --appimage-extract` and run `squashfs-root/AppRun`. |
 | Rebuild fails with `Text file busy` | The target AppImage is still running. Quit it and run `install-appimage.sh` again (the script checks for this first). |
-| Menu entry missing after editing the menu | KDE Menu Editor can write a root `<Exclude>` for `Ampersand.desktop` into `~/.config/menus/applications-kmenuedit.menu`, which hides it everywhere. The install step removes that block, pins the entry in Development and rebuilds the menu cache (backup at `applications-kmenuedit.menu.bak`). |
