@@ -39,7 +39,7 @@ internal static class ToolchainExec
 	{
 		var missing = new List<string>();
 		// Direct OS calls (not a helper): CA1416 flow analysis only understands
-		// these inline, as in RunLog.EnsureWrapper.
+		// these inline.
 		if ( !OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS() )
 			return missing;
 

@@ -1022,7 +1022,8 @@ internal sealed class MainWindow : Window
 			}
 
 			if ( !SystemTerminal.TryBuild( new[] { self, Program.DependencyCheckArgument },
-					out var argv, out var emulator ) )
+					root, null,
+					out var argv, out var emulator, out var scrubbed ) )
 			{
 				await ConfirmDialog.Notify( this, "No terminal emulator",
 					"The dependency check prints a coloured report, so it needs a terminal "
@@ -1039,6 +1040,8 @@ internal sealed class MainWindow : Window
 				WorkingDirectory = root,
 				UseShellExecute = false
 			};
+
+			SystemTerminal.ScrubEnvironment( info, scrubbed );
 
 			for ( var i = 1; i < argv.Count; i++ )
 				info.ArgumentList.Add( argv[i] );
@@ -1105,39 +1108,23 @@ internal sealed class MainWindow : Window
 			var args = new List<string> { self, Program.BootstrapArgument };
 			if ( skipDeps ) args.Add( "--skip-deps" );
 
-			// Fail fast when no emulator exists so the log below is only created
-			// for runs that actually launch - cancelled or impossible runs must
-			// not leave empty logs behind.
-			if ( SystemTerminal.Detect() is null )
-			{
-				await ConfirmDialog.Notify( this, "No terminal emulator",
-					"Bootstrap prints a coloured build log, so it needs a terminal "
-						+ "window - and no emulator was found on PATH.\n\n"
-						+ "Install one (gnome-terminal, konsole, alacritty, kitty, foot, xterm...), "
-						+ "or run it yourself:\n\n"
-						+ self + " " + Program.BootstrapArgument + ( skipDeps ? " --skip-deps" : "" ) );
-				return;
-			}
-
-			// Same tee as launches (ProcessRunner.StartInTerminal): the terminal
-			// keeps the coloured output, and a copy lands in the log folder with
-			// the exact command in its header. The build worker itself just writes
-			// to stdout/stderr, so no log awareness is needed on that side.
+			// Direct spawn, like launches (ProcessRunner.StartInTerminal): the
+			// terminal window IS the coloured build log, so the child's fds stay
+			// on the pty. The log keeps the exact command in its header; output
+			// itself is not captured. The build worker just writes to
+			// stdout/stderr, so no log awareness is needed on that side.
 			var logPath = RunLog.CreateLogPath( "Build S&Box" );
 			RunLog.WriteCommandHeader(
 				logPath,
 				args,
 				root,
 				new Dictionary<string, string>() );
-			var wrapper = RunLog.EnsureWrapper();
-			// wrapper.sh <log> <original command...>
-			var wrapped = new List<string> { wrapper, logPath };
-			wrapped.AddRange( args );
+			RunLog.WriteTerminalNote( logPath );
 
-			if ( !SystemTerminal.TryBuild( wrapped, out var argv, out var emulator ) )
+			if ( !SystemTerminal.TryBuild( args, root, null,
+					out var argv, out var emulator, out var scrubbed ) )
 			{
-				// Race-only fallback: Detect() passed above, so the emulator list
-				// changed under us. Remove the just-created log so a run that
+				// No emulator: remove the just-created log so a run that
 				// never launched leaves nothing behind.
 				try { File.Delete( logPath ); } catch { }
 				await ConfirmDialog.Notify( this, "No terminal emulator",
@@ -1155,6 +1142,8 @@ internal sealed class MainWindow : Window
 				WorkingDirectory = root,
 				UseShellExecute = false
 			};
+
+			SystemTerminal.ScrubEnvironment( info, scrubbed );
 
 			for ( var i = 1; i < argv.Count; i++ )
 				info.ArgumentList.Add( argv[i] );

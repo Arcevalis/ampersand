@@ -8,7 +8,7 @@ namespace Ampersand;
 
 /// <summary>
 /// Runs a launch script, either in the user's own terminal emulator or in the
-/// background with its output discarded.
+/// background with its output captured to a log file.
 ///
 /// There used to be a third mode - a pty feeding an emulated terminal pane inside
 /// the window - and it was the largest thing in the app. It is gone. Rebuilding a
@@ -19,9 +19,12 @@ namespace Ampersand;
 /// The finding that justified the pty still stands, and a real emulator now
 /// satisfies it for free: the engine only emits ANSI colour when its output is a
 /// tty - measured at 0 escape sequences in 2,462 lines through a pipe against
-/// 1,172 in the same startup through a pty. An emulator gives the child a real
-/// tty, so the colour is the engine's own and there is still no colorizer here.
-/// Background mode has no tty and therefore no colour; nothing reads it anyway.
+/// 1,172 in the same startup through a pty. The terminal path therefore spawns
+/// the child directly, engine-style (see SystemTerminal): no tee pipe, no
+/// wrapper, so the child's stdin/stdout/stderr are the terminal's pty, isatty
+/// holds, and the engine's console input (gated on Console.BufferWidth &gt; 0)
+/// and status overlay behave like the Windows console. Background mode has no
+/// tty and therefore no colour; its output is captured to the log file instead.
 ///
 /// Stop is honest only in background mode, where the child is ours and Kill( true )
 /// reaches its whole tree. An emulator that forks - gnome-terminal is a D-Bus
@@ -29,6 +32,16 @@ namespace Ampersand;
 /// tree, so Stop kills the window we started and not necessarily what is in it.
 /// That is why SystemTerminal carries a don't-fork flag per emulator: with
 /// --wait the client stays, and killing it takes the session with it.
+///
+/// Lifetime caveat: the tab lives only as long as its direct child. sbox-dev
+/// detaches sbox-launcher and returns 0 immediately by engine design, so its
+/// tab would close mid-boot and the closing tab's SIGHUP would kill the
+/// launcher pre-log with no window and no error anywhere. sbox-dev.sh arms
+/// SBOX_DETACH (see apps/_common.sh sbox_exec): setsid into its own session
+/// (no controlling terminal, so the launcher outlives the tab) and - on a
+/// terminal - waits for the whole detached session, so the tab auto-closes on
+/// quit instead. The game and server run in-process and deliberately keep the
+/// tab's session (Ctrl+C, close-kills).
 /// </summary>
 internal sealed class ProcessRunner
 {
@@ -79,26 +92,24 @@ internal sealed class ProcessRunner
 		string workingDirectory,
 		IReadOnlyDictionary<string, string> extraEnv )
 	{
-		// Always log: wrap command with bash tee wrapper on the host so konsole
-		// still shows output but a copy lands in ~/.cache/sbox-ampersand/logs.
-		// Record the command itself first so the log shows what was run.
+		// Direct spawn, engine-style, wrapped in a stay-open-on-failure hold:
+		// the terminal window IS the output; a clean exit closes it with the
+		// command, while a crash holds it open with the transcript plus a
+		// prompt so the error is never lost to a flash. sbox-dev's linger is
+		// owned by its script instead (SBOX_DETACH waits for the detached
+		// session, so the tab auto-closes on quit). The hold adds no pipe, so
+		// the child's fds stay on the pty (isatty true, colours on, server
+		// console input works); it propagates the exit code, so tracking and
+		// the failure tail dialog still see the real status. The log keeps
+		// the exact command for reproduction; output itself lives in the
+		// window, not the log.
 		LastLogPath = RunLog.CreateLogPath( Name );
 		RunLog.WriteCommandHeader( LastLogPath, command, workingDirectory, extraEnv );
+		RunLog.WriteTerminalNote( LastLogPath );
 
-		if ( !BashAvailable() )
-		{
-			Notice?.Invoke( "bash not found - logging to file instead." );
-			StartInBackground( command, workingDirectory, extraEnv );
-			return;
-		}
+		var held = SystemTerminal.WithHold( command, Name );
 
-		var wrapper = RunLog.EnsureWrapper();
-
-		// wrapper.sh <log> <original command...>
-		var wrapped = new List<string> { wrapper, LastLogPath };
-		wrapped.AddRange( command );
-
-		if ( !SystemTerminal.TryBuild( wrapped, out var argv, out var emulator ) )
+		if ( !SystemTerminal.TryBuild( held, workingDirectory, extraEnv, out var argv, out var emulator, out var scrubbedNames ) )
 		{
 			// Fallback: no terminal -> background log capture (logs only).
 			Notice?.Invoke( "no terminal emulator found - logging to file instead." );
@@ -106,7 +117,7 @@ internal sealed class ProcessRunner
 			return;
 		}
 
-		if ( !TryStart( argv, workingDirectory, extraEnv, redirect: false, out var problem ) )
+		if ( !TryStartTerminal( argv, workingDirectory, scrubbedNames, out var problem ) )
 		{
 			Notice?.Invoke( "could not launch " + emulator + " - " + problem );
 			return;
@@ -142,6 +153,48 @@ internal sealed class ProcessRunner
 
 		Notice?.Invoke( "running in background - log: " + LastLogPath );
 		StateChanged?.Invoke( this );
+	}
+
+	private bool TryStartTerminal(
+		IReadOnlyList<string> argv,
+		string workingDirectory,
+		IReadOnlyList<string> scrubbedNames,
+		out string problem )
+	{
+		problem = string.Empty;
+
+		var info = new ProcessStartInfo
+		{
+			FileName = argv[0],
+			WorkingDirectory = workingDirectory,
+			UseShellExecute = false,
+			RedirectStandardOutput = false,
+			RedirectStandardError = false
+		};
+
+		for ( var i = 1; i < argv.Count; i++ )
+			info.ArgumentList.Add( argv[i] );
+
+		// The inner command carries its environment via env (see
+		// SystemTerminal.TryBuild); the terminal itself starts scrubbed so
+		// session Qt/native variables cannot abort the emulator. Never add the
+		// launch env to the terminal's own environment.
+		SystemTerminal.ScrubEnvironment( info, scrubbedNames );
+
+		try
+		{
+			process = new Process { StartInfo = info, EnableRaisingEvents = true };
+			Track( process );
+			process.Start();
+		}
+		catch ( Exception e )
+		{
+			problem = e.Message;
+			return false;
+		}
+
+		IsRunning = true;
+		return true;
 	}
 
 	private bool TryStart(
@@ -192,13 +245,10 @@ internal sealed class ProcessRunner
 				}
 			}
 
-			process.Exited += ( _, _ ) => Post( () =>
+			Track( process, () =>
 			{
 				try { logWriter?.Flush(); logWriter?.Dispose(); } catch { }
 				try { logStream?.Dispose(); } catch { }
-				ExitCode = SafeExitCode( process );
-				IsRunning = false;
-				StateChanged?.Invoke( this );
 			} );
 
 			if ( redirect )
@@ -248,6 +298,22 @@ internal sealed class ProcessRunner
 		return true;
 	}
 
+	/// <summary>
+	/// Watches a started child: on exit records the code, marks us stopped and
+	/// notifies, running <paramref name="first"/> before that (background mode
+	/// flushes its log there). One place for both spawn paths.
+	/// </summary>
+	private void Track( Process proc, Action? first = null )
+	{
+		proc.Exited += ( _, _ ) => Post( () =>
+		{
+			try { first?.Invoke(); } catch { }
+			ExitCode = SafeExitCode( proc );
+			IsRunning = false;
+			StateChanged?.Invoke( this );
+		} );
+	}
+
 	private static int? SafeExitCode( Process? process )
 	{
 		try
@@ -289,10 +355,5 @@ internal sealed class ProcessRunner
 		}
 		catch { }
 		action();
-	}
-
-	private static bool BashAvailable()
-	{
-		return File.Exists( "/bin/bash" ) || File.Exists( "/usr/bin/bash" );
 	}
 }

@@ -154,7 +154,8 @@ the **S&BOX LOCATION** field in the sidebar (Enter or click away to apply,
 Point to your S&box repo (sbox-public), Select a row, 
 set the toggles, hit play.
 **Stop** kills a background run (for terminal runs it closes the window;
-emulators that fork can't always take the engine with them).
+emulators that fork can't always take the engine with them). sbox-dev detaches
+its launcher, so Stop closes its tab but leaves a running launcher alone.
 Crashes will show a dialog to help you debug.
 
 Per-target toggles:
@@ -182,21 +183,23 @@ Ampersand passes it as `+game <value>`.
 - **Build S&Box**: runs the engine's `Setup.sh` (git hooks, per-platform
   artifacts, bindings, managed, shaders, content), then Ampersand's own `ldd`
   dependency report over `game/bin/linuxsteamrt64`. Runs in your terminal via
-  `ampersand --bootstrap` (`--skip-deps` skips the report on the CLI), tee'd to
-  `~/.cache/sbox-ampersand/logs/` like a launch so the build output survives
-  the terminal window.
+  `ampersand --bootstrap` (`--skip-deps` skips the report on the CLI); the log
+  in `~/.cache/sbox-ampersand/logs/` keeps the exact command while the output
+  itself lives in the terminal window.
 - **Check for missing dependencies**: `ldd` sweep of
   `game/bin/linuxsteamrt64` plus the engine's bundled .NET runtime, on the
   **host and inside steamrt4**, plus the steamrt4 compat cache status. Runs via
   `ampersand --dependency-check`. (Host-clean but container-broken is the
   classic trap. This checks both.)
-- **Open log folder**: every launch and every build is tee'd to
-  `~/.cache/sbox-ampersand/logs/` whether it used a terminal or not. Each log opens with the exact command
+- **Open log folder**: every launch and every build leaves a log in
+  `~/.cache/sbox-ampersand/logs/`. Each log opens with the exact command
   that was run (`$ cd ...` plus env assignments and argv, shell-quoted) so a
-  launch can be reproduced from the log alone. Below the header, the scripts
-  narrate themselves (`+ [script:line] command` trace lines via `set -x` in
+  launch can be reproduced from the log alone. Terminal runs show their output
+  in the window instead of the log; background runs (system-terminal toggle
+  off) capture everything to the log instead. Either way the scripts narrate
+  themselves (`+ [script:line] command` trace lines via `set -x` in
   `apps/_common.sh`, on by default) so inner steps — shim checks, the final
-  `exec` of the engine binary with its composed `LD_PRELOAD` — are captured
+  `exec` of the engine binary with its composed `LD_PRELOAD` — are visible
   too. `SBOX_TRACE=0` silences the trace.
 
 ### CLI modes
@@ -238,7 +241,7 @@ App.cs / MainWindow.cs  # Avalonia app + entire window (sidebar, targets, status
 LaunchTarget.cs         # one script row: script file, runner, toggles
 ScriptMetadata.cs       # "# ampersand: key=value" header parser
 ProcessRunner.cs        # terminal-emulator or background process spawning
-SystemTerminal.cs       # emulator detection + per-emulator --wait flags
+SystemTerminal.cs       # emulator detection + per-emulator stay-attached flags, workdir, env scrub
 SteamRt4Runtime.cs      # find + validate the Steam Linux Runtime install
 SteamRt4Compat.cs       # libunwind + editor-only pcre2-16 shim cache for the container
 SteamLauncherService.cs # container entry through Steam's launcher service

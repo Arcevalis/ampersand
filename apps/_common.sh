@@ -127,5 +127,141 @@ sbox_exec()
 	export SDL_VIDEO_DRIVER
 
 	cd "$GAME_DIR"
+
+	# Detached launches (sbox-dev starts sbox-launcher as a separate process
+	# and returns 0 immediately): the terminal tab would close while the
+	# launcher is still booting, and the closing tab's SIGHUP would kill it
+	# pre-log with no window and no error anywhere. Run detached in our own
+	# session (no controlling terminal) so the launcher outlives the tab,
+	# then - on a terminal - wait for the whole detached session below, so
+	# the console auto-closes on quit. Only armed per-script via SBOX_DETACH=1
+	# (sbox-dev menu mode; -project/-test run in-process) - the game and
+	# server run in-process and want the tab's session (Ctrl+C delivery,
+	# close-tab-kills). Plain sh fds are untouched throughout, so while the
+	# tab lives the trace still shows and isatty still holds.
+	if [ "${SBOX_DETACH:-0}" != "0" ]; then
+		# Ignore SIGHUP from here on: it survives exec, so the engine and the
+		# launcher inherit the immunity. Verified necessary: setsid can leave
+		# the new session holding the pty as its controlling terminal (seen
+		# in /proc as tty=pts/N), so the session leader's exit HUPs the group
+		# and kills a booting launcher mid-flight. TERM/INT stay lethal.
+		trap '' HUP
+		_code=0
+		if command -v setsid >/dev/null 2>&1; then
+			# -w waits for sbox-dev itself (instant 0 on detach) and reports
+			# its real code deterministically, fork or not.
+			setsid -w "$_exe" "$@" || _code=$?
+		else
+			"$_exe" "$@" || _code=$?
+		fi
+		# Nonzero = failed before detaching: hand the code up (the launcher's
+		# failure hold shows it).
+		if [ $_code -ne 0 ]; then
+			exit $_code
+		fi
+		# Detached cleanly: with a terminal, wait for the session so the
+		# console lives exactly as long as it. Non-tty stdin (background
+		# runs, pipes) skips the wait and keeps instant-exit semantics, so
+		# headless tracking can never wedge waiting on a GUI.
+		if [ -t 0 ] && command -v pgrep >/dev/null 2>&1 && command -v ps >/dev/null 2>&1; then
+			sbox_wait_session
+		fi
+		# The wait tracks lifetime, not outcome: a launcher crash and a clean
+		# quit both end the session, so both close the tab at 0 - the engine's
+		# own game/logs carry the crash detail, not this exit code.
+		exit 0
+	fi
 	exec "$_exe" "$@"
+}
+
+# Waits for the detached sbox session (launcher hub and/or the editor the hub
+# spawns as its child) to end. Either quit order works: the hub may stay open
+# beside the editor, or CloseOnLaunch may destroy it while its editor child
+# continues - both stay in the launcher's session, so the union covers them.
+# Same-second double launches can cross-track (union semantics); the tab then
+# lingers until both quit, which is benign. Needs pgrep/ps (checked by the
+# caller); give-up exits 1 into the failure hold so a missing launcher is
+# diagnosable instead of silent.
+sbox_wait_session()
+{
+	# This function polls ps every couple of seconds for as long as the
+	# session runs (hours, potentially): under the launch tracing (set -x)
+	# that would flood the terminal with ps/grep/sleep lines and bury the
+	# launch output above, so tracing goes off for the tracking below. The
+	# startup trace already printed; explicit echoes still show.
+	set +x
+	echo "sbox-dev detached; waiting for the launcher session to end (terminal closes on quit)."
+	# Find the freshly spawned session: newest hub or editor young enough to
+	# be ours. The hub itself may live only milliseconds (spawn editor, exit),
+	# so the poll matches the union - the long-lived editor is caught reliably
+	# even when the hub flashes past unseen. Basename matches - container path
+	# remapping changes the dirname. The [/] keeps pgrep from matching this
+	# shell's own command line.
+	_launch_pid=""
+	_tries=0
+	# Probe etimes support once (busybox ps lacks it): without it, accept the
+	# newest match rather than erroring every candidate out.
+	_have_etimes=0
+	if ps -o etimes= -p $$ 2>/dev/null | grep -qE '^[[:space:]]*[0-9]+'; then
+		_have_etimes=1
+	fi
+	while [ $_tries -lt 15 ]; do
+		_cand=$(pgrep -n -f '[/]sbox-launcher( |$)|sbox-dev .*-project' || true)
+		if [ -n "$_cand" ]; then
+			if [ $_have_etimes -eq 1 ]; then
+				_age=$(ps -o etimes= -p "$_cand" 2>/dev/null | tr -d ' ' || true)
+				case "$_age" in
+					''|*[!0-9]*)
+						;;
+					*)
+						if [ "$_age" -le 20 ]; then
+							_launch_pid=$_cand
+							break
+						fi
+						;;
+				esac
+			else
+				_launch_pid=$_cand
+				break
+			fi
+		fi
+		_tries=$((_tries + 1))
+		sleep 1
+	done
+	if [ -z "$_launch_pid" ]; then
+		echo "error: sbox-dev detached but no launcher or editor appeared - see game/logs/sbox-launcher.log" >&2
+		exit 1
+	fi
+	# Resolve the launcher's session for union tracking; fall back to global
+	# matching when ps -s is unsupported (same-second double launches may
+	# then cross-track - benign lingering, documented above).
+	_sid=$(ps -o sid= -p "$_launch_pid" 2>/dev/null | tr -d ' ' || true)
+	_session_mode=0
+	case "$_sid" in
+		''|*[!0-9]*)
+			;;
+		*)
+			if ps -s "$_sid" -o pid= 2>/dev/null | grep -q "$_launch_pid"; then
+				_session_mode=1
+			fi
+			;;
+	esac
+	while :; do
+		# Tab gone (stdout no longer a tty)? Bow out quietly - the detached
+		# launcher continues on its own (setsid + HUP immunity above).
+		if [ ! -t 1 ]; then
+			break
+		fi
+		if [ $_session_mode -eq 1 ]; then
+			_list=$(ps -s "$_sid" -o stat=,args= 2>/dev/null || true)
+		else
+			_list=$(ps -eo stat=,args= 2>/dev/null || true)
+		fi
+		# Non-zombie hub or in-process editor (-project) still alive?
+		if printf '%s\n' "$_list" | grep -v '^Z' | grep -qE 'sbox-launcher|sbox-dev .*-project'; then
+			sleep 2
+		else
+			break
+		fi
+	done
 }

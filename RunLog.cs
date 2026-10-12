@@ -32,7 +32,9 @@ internal static class RunLog
 		var unique = $"{safe}-{stamp}_{Environment.ProcessId}_{Guid.NewGuid().ToString( "N" )[..6]}.log";
 		var path = Path.Combine( dir, unique );
 
-		// Touch file so wrapper can append even if tee races.
+		// Touch file so the log path exists even when the run's output goes to
+		// a terminal window instead of this file (terminal spawns are direct,
+		// engine-style, so the child's pty output is not captured here).
 		try { File.WriteAllText( path, $"--- {targetName} {DateTime.Now:O} ---{Environment.NewLine}" ); } catch { }
 
 		// Best-effort prune, never fail launch.
@@ -106,6 +108,24 @@ internal static class RunLog
 				return "'" + s.Replace( "'", "'\\''" ) + "'";
 		}
 		return s;
+	}
+
+	/// <summary>
+	/// Notes in the log that the run's output went to its terminal window and
+	/// was not captured here. Terminal spawns are direct (engine-style), so the
+	/// child keeps the pty and interactive input works - at the cost of no
+	/// transcript. The header above still records the exact command for
+	/// reproduction. Never throws.
+	/// </summary>
+	public static void WriteTerminalNote( string path )
+	{
+		try
+		{
+			using var w = new StreamWriter( new FileStream( path, FileMode.Append, FileAccess.Write, FileShare.ReadWrite ) ) { AutoFlush = true };
+			w.WriteLine( "(output shown in terminal window - not captured in this log)" );
+			w.WriteLine();
+		}
+		catch { }
 	}
 
 	/// <summary>Last N lines, ANSI-stripped, truncated to maxChars.</summary>
@@ -190,64 +210,5 @@ internal static class RunLog
 			return true;
 		}
 		catch { return false; }
-	}
-
-	// Wrapper script handling
-	private static string WrapperPath => Path.Combine( LogDirectory, "logwrap.sh" );
-
-	private const string WrapperContent = """
-		#!/usr/bin/env bash
-		LOG="$1"
-		shift
-		# Ensure log dir exists (host side)
-		mkdir -p "$(dirname "$LOG")" 2>/dev/null
-		# Run target, tee to log. PIPESTATUS[0] is target exit, not tee.
-		"$@" 2>&1 | tee -a "$LOG"
-		EXIT=${PIPESTATUS[0]}
-		exit $EXIT
-		""";
-
-	public static string EnsureWrapper()
-	{
-		var dir = LogDirectory;
-		try { Directory.CreateDirectory( dir ); } catch { }
-		var path = WrapperPath;
-		try
-		{
-			var write = true;
-			if ( File.Exists( path ) )
-			{
-				try { if ( File.ReadAllText( path ) == WrapperContent ) write = false; } catch { }
-			}
-			if ( write )
-				File.WriteAllText( path, WrapperContent );
-
-			// chmod +x
-				if ( OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() )
-			{
-				try
-				{
-					File.SetUnixFileMode( path,
-						UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute |
-						UnixFileMode.GroupRead | UnixFileMode.GroupExecute |
-						UnixFileMode.OtherRead | UnixFileMode.OtherExecute );
-					return path;
-				}
-				catch { }
-			}
-			try
-			{
-				using var p = Process.Start( new ProcessStartInfo
-				{
-					FileName = "/bin/chmod",
-					ArgumentList = { "+x", path },
-					UseShellExecute = false
-				} );
-				p?.WaitForExit( 2000 );
-			}
-			catch { }
-		}
-		catch { }
-		return path;
 	}
 }

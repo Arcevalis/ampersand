@@ -39,7 +39,10 @@ internal static class ConfirmDialog
 	/// <summary>
 	/// Non-zero exit tail dialog: Avalonia dialog showing last ~80 lines
 	/// of the log, with actions to open the log file/folder.
-	/// Always closes (no read-pause in konsole), tail is shown here.
+	/// Background runs capture everything, so the tail is the failure itself.
+	/// Terminal runs are direct (engine-style) so the log holds only the command
+	/// header - the output lived in the terminal window, which closes with the
+	/// child; the dialog then shows what was run and where.
 	/// </summary>
 	public static Task<bool> NotifyTail( Window owner, string title, string logPath, int exitCode )
 	{
