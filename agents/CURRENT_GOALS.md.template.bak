@@ -4,7 +4,7 @@ Hello! Thank you for your time we're so excited you're working for us! Happy hap
 
 All tasks are DONE and WORKED ON by SUBAGENTS. PEER Review is ALSO done by SUBAGENTS. You are simply their task master.
 
-Upon the completion of each task, a SUBAGENT shall write a git commit and push.
+Upon the completion of each task, and you've changed "DONE? NO!" to "DONE? YES!", a SUBAGENT shall write a git commit, include current_goals.md, and push.
 
 References to variables like X and Y automatically imply that these are to be editor exposed properties for developer tweaking.
 
@@ -23,4 +23,4 @@ Notes:
 Clarification Questions and Answers:
 
 
-IGNORE: <</goal Update ampersand project state according to document CURRENT_GOALS.md. If "SESSION START?" is "NO!" then consider best clarifying questions, ask them, and record them below and after that update "SESSION START?" to "YES!" >>
+IGNORE: <</goal Update ampersand project state according to document /agents/current_goals.md. If "SESSION START?" is "NO!" then consider best clarifying questions, ask them, and record them below and after that update "SESSION START?" to "YES!" >>
