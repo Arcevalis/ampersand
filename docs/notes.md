@@ -3,7 +3,14 @@
 ## Known Edge Cases Not Handled
  + gnome-terminal. It runs new tabs from a long-lived server process, so stale SBOX_* variables in that server's environment could still reach the launch. That would only happen if the server itself was started from a shell Ampersand launched. I left it alone.
 
-## sbox-cli unavailable in Preferences > AI Agents after opening a project from the sbox launcher (investigated, not fixed)
+## sbox-cli unavailable in Preferences > AI Agents after opening a project from the sbox launcher (fixed in ampersand, solution C)
+
+Fix applied (C)
+ - apps/_common.sh now has sbox_dotnet_env(), which exports DOTNET_ROOT=$GAME_DIR/bin/dotnet and DOTNET_SYSTEM_GLOBALIZATION_APPLOCALICU=<suffix of the libicuuc.so.* beside CoreCLR>. sbox_exec calls it as `sbox_dotnet_env force` only when SBOX_IN_STEAMRT4=1, so the editor inherits both and its sbox-cli child inherits them from the editor.
+ - Container only, on purpose: the host has a working system .NET, and an app-local ICU value there would leak into every other child of the editor (IDEs, other .NET tools) that runs on a runtime without that ICU. `force` also ignores any DOTNET_ROOT inherited from Steam's environment, which could name a host path or a runtime with no ICU beside it.
+ - apps/sbox-cli.sh calls the same helper without an argument, so a host run keeps using whatever the caller set and only falls back to the engine's runtime. Its hand-run behaviour is unchanged.
+ - The --env half of C turned out unnecessary: the launch script and _common.sh run INSIDE the container, so an exported value needs no crossing. There is no allowlist to add to anyway - --env is just the environment LaunchComposer.PrepareRuntime composes, handed to steam-runtime-launch-client by SteamLauncherService.
+ - The build copies apps/*.sh to bin/<cfg>/net10.0/scripts/, so a rebuild (or an AppImage reinstall) is needed before the window uses the fix.
 
 Repro path
  - Ampersand GUI -> sbox-dev with no -project -> hub sbox-launcher -> pick a project -> hub spawns the editor -> Preferences > AI Agents shows "Couldn't run sbox-cli. See the console for details."
@@ -26,6 +33,8 @@ Candidate fixes
  - Separately worth noting: Run() logs only on exception (AgentSkill.cs:76), so the apphost's own ".NET not found" message was swallowed. Logging result.Message on a non-zero exit would have made this diagnosable from game/logs.
 
 How to verify a fix
+ Steps 1-2 apply to fix A only: they check for a runtime hint baked into the sbox-cli apphost, and fix C leaves the binary unchanged, so they can never pass under C.
  1. Host-side gate, no s&box process involved: `bwrap --dev-bind / / --tmpfs /etc/dotnet --chdir game -- ./bin/managed/sbox-cli --skill-status` must print the two-target JSON and exit 0 (today: "You must install .NET", exit 131).
  2. Check the hint landed: `strings game/bin/managed/sbox-cli | grep dotnet` should now show a hint, as it already does for sbox-dev.
  3. Real path: launch the hub from Ampersand with the Steam runtime on, open a project, and Preferences > AI Agents should list the Claude/Codex rows instead of "Couldn't run sbox-cli".
+ 4. Fix C (the applied one): launch with ampersand into the Steam runtime, for example `ampersand --launch sbox-dev --project P --wait-ready`, then from inside that editor run bin/managed/sbox-cli --skill-status (for example through `ampersand --cli -- --connect P --call run_csharp` with a body that starts the process the way AgentSkill.Run does); it must exit 0 with the two-target JSON, and the editor's environment must show DOTNET_ROOT=<root>/game/bin/dotnet and DOTNET_SYSTEM_GLOBALIZATION_APPLOCALICU=72.1.0.3.
