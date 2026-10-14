@@ -36,6 +36,12 @@ internal static class Program
 			return BootstrapMain( args );
 		if ( args.Length > 0 && args[0] == ProbeDistroArgument )
 			return ProbeDistroMain( args );
+		if ( args.Length > 0 && args[0] == HeadlessLaunch.Argument )
+			return HeadlessLaunch.Run( args );
+		if ( args.Length > 0 && args[0] == HeadlessStop.Argument )
+			return HeadlessStop.Run( args );
+		if ( args.Length > 0 && args[0] == HeadlessCli.Argument )
+			return HeadlessCli.Run( args );
 
 		return BuildAvaloniaApp().StartWithClassicDesktopLifetime( args );
 	}
