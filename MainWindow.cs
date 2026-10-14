@@ -14,6 +14,7 @@ using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Platform.Storage;
 using Avalonia.Styling;
+using Avalonia.Threading;
 using Avalonia.VisualTree;
 
 namespace Ampersand;
@@ -52,12 +53,7 @@ internal sealed class MainWindow : Window
 		RequestedThemeVariant = ThemeVariant.Dark;
 		Background = TerminalTheme.Background;
 
-		foreach ( var (name, script) in new[]
-		{
-			( "sbox", "sbox.sh" ),
-			( "sbox-dev", "sbox-dev.sh" ),
-			( "sbox-server", "sbox-server.sh" )
-		} )
+		foreach ( var (name, script) in LaunchComposer.Targets )
 		{
 			targets.Add( new LaunchTarget( name, script ) );
 		}
@@ -632,22 +628,10 @@ internal sealed class MainWindow : Window
 			}
 		}
 
-		// Scripts live with the built app (OutDir/scripts/), not inside the
-		// sbox checkout. They stay loose files so users can edit them at runtime.
-		var script = AppPaths.FindScript( target.ScriptFile );
+		var script = LaunchComposer.FindScript( root, target.ScriptFile, out var scriptError );
 		if ( script is null )
 		{
-			// Legacy fallback: ampersand inside sbox checkout (dev layout)
-			var legacy = Path.Combine( root, "ampersand", "apps", target.ScriptFile );
-			if ( File.Exists( legacy ) )
-				script = legacy;
-		}
-		if ( script is null || !File.Exists( script ) )
-		{
-			var tried = AppPaths.FindScriptsDir() ?? AppPaths.ScriptsDir;
-			await Fail( target, "Launch script missing",
-				$"Not found: {target.ScriptFile}\n\nLooked in:\n{tried}\n(built scripts dir)\n\n"
-				+ "Rebuild ampersand or check that apps/*.sh were copied to <OutDir>/scripts/." );
+			await Fail( target, scriptError!.Title, scriptError.Message );
 			return;
 		}
 
@@ -657,41 +641,10 @@ internal sealed class MainWindow : Window
 		if ( !await EnsureCasefoldShimAsync( root, target ) )
 			return;
 
-		var env = new Dictionary<string, string>
-		{
-			["SBOX_REPO_ROOT"] = root,
-			// Wayland Qt plugin not shipped/supported - force xcb (XWayland).
-			// Only xcb is bundled ("Available platform plugins are: xcb").
-			// Set here so it crosses the Steam Runtime container boundary via --env;
-			// _common.sh also hard-sets it for direct script runs.
-			["QT_QPA_PLATFORM"] = "xcb",
-			// SDL3 defaults to the Wayland backend when WAYLAND_DISPLAY is set,
-			// making the viewport a native Wayland surface: no X window, no
-			// in-process X press owner, so every X grab fails AlreadyGrabbed and
-			// mid-drag warps die in the compositor. Force X11 so the press owner
-			// is SDL's in-process X connection (SDL3 name; SDL2 called it
-			// SDL_VIDEODRIVER). Same --env crossing as above.
-			["SDL_VIDEO_DRIVER"] = "x11"
-		};
-		// Case-insensitive asset fallback (see casefoldFix checkbox): same
-		// arrangement. Crosses into the Steam runtime container via --env like
-		// the rest, but the .so itself must resolve inside - prefer host-side
-		// runs when relying on the fallback.
-		if ( casefoldFix.IsChecked == true )
-			env["SBOX_CASEFOLD"] = "1";
-		// Engine input diagnostics (see inputDebug checkbox): the toggle sets
-		// SBOX_INPUT_DEBUG=1 (the engine treats any non-empty value as on).
-		// With the toggle off, an ambient value from our own environment is
-		// still forwarded, so launching ampersand with the flag set keeps
-		// working. Crosses into the container via --env.
-		if ( inputDebug.IsChecked == true )
-			env["SBOX_INPUT_DEBUG"] = "1";
-		else
-		{
-			var ambientInputDebug = Environment.GetEnvironmentVariable( "SBOX_INPUT_DEBUG" );
-			if ( !string.IsNullOrEmpty( ambientInputDebug ) )
-				env["SBOX_INPUT_DEBUG"] = ambientInputDebug;
-		}
+		var env = LaunchComposer.BaseEnvironment(
+			root,
+			casefold: casefoldFix.IsChecked == true,
+			inputDebug: inputDebug.IsChecked == true );
 		var command = new List<string>();
 
 		// Held across the await below, not just the spawn: PrepareRuntime can sit
@@ -725,11 +678,8 @@ internal sealed class MainWindow : Window
 		}
 
 		// Append sbox-server game argument (ident or .sbproj path) when launching the
-		// dedicated server. The engine expects "+game <ident|/path/to.sbproj>" as
-		// concommand arguments (see engine/Sandbox.GameInstance/GameInstanceDll.cs:872,
-		// ViewportTools.SpawnDedicatedServer). We store only the ident/path and add
-		// the "+game" switch here. Both host and container wrapper paths forward "$@" to sbox-server.
-		if ( target.ScriptFile == "sbox-server.sh" )
+		// dedicated server - see LaunchComposer.AppendServerGame.
+		if ( target.ScriptFile == LaunchComposer.ServerScript )
 		{
 			var serverGame = GetSboxServerGame();
 			if ( !string.IsNullOrWhiteSpace( serverGame ) )
@@ -748,8 +698,7 @@ internal sealed class MainWindow : Window
 				}
 				catch { }
 
-				command.Add( "+game" );
-				command.Add( serverGame );
+				LaunchComposer.AppendServerGame( target.ScriptFile, command, serverGame );
 			}
 		}
 
@@ -768,13 +717,8 @@ internal sealed class MainWindow : Window
 	}
 
 	/// <summary>
-	/// Builds the containerised command, and refuses to build one at all unless
-	/// Steam is up.
-	///
-	/// Steam running is a hard requirement, not a preference: the container is
-	/// entered through the launcher service running alongside the client, because
-	/// that is the only context in which the runtime's own bwrap is allowed to
-	/// create a user namespace. See SteamLauncherService.
+	/// Builds the containerised command (LaunchComposer.PrepareRuntime), which
+	/// refuses to build one at all unless Steam is up.
 	/// </summary>
 	private async Task<bool> PrepareRuntime(
 		LaunchTarget target,
@@ -783,106 +727,42 @@ internal sealed class MainWindow : Window
 		List<string> command,
 		Dictionary<string, string> env )
 	{
-		var install = SteamRt4Runtime.Find();
-
-		if ( install is null )
+		// The preparation shells out or copies megabytes, so none of it may run
+		// on the UI thread - the Steam probe alone can sit five seconds. This is
+		// the reason the method is async; awaiting a blocking call would only
+		// move the freeze, not remove it.
+		var prepared = await Task.Run( () =>
 		{
-			await Fail( target, "Steam Linux Runtime not installed",
-				"Steam Linux Runtime 4.0 (steamrt4) is not installed.\n\n"
-					+ "Install it from Steam:  steam steam://install/" + SteamRt4Runtime.SteamAppId );
-			return false;
-		}
-
-		statusText.Text = target.Name + ": runtime " + install.Version;
-
-		// Everything below shells out or copies megabytes, so none of it may run
-		// on the UI thread - the probe alone can sit five seconds. This is the
-		// reason the method is async; awaiting a blocking call would only move
-		// the freeze, not remove it.
-		if ( !await Task.Run( () => SteamLauncherService.IsAvailable( install ) ) )
-		{
-			await Fail( target, "Steam is not running",
-				"s&box can only be launched in the Steam runtime while the Steam client is "
-					+ "running - the container is entered through Steam's own launcher service.\n\n"
-					+ "Start Steam, wait for it to sign in, then try again." );
-			return false;
-		}
-
-		var requirements = await Task.Run( () =>
-		{
-			var met = SteamRt4Runtime.CheckRequirements( install, out var found );
-			return (Met: met, Problems: found);
+			var ok = LaunchComposer.PrepareRuntime(
+				root,
+				script,
+				command,
+				env,
+				version => Dispatcher.UIThread.Post(
+					() => statusText.Text = target.Name + ": runtime " + version,
+					// Normal, not Post's default: the await continuation below
+					// resumes at Normal, and a lower-priority post could land
+					// after it and overwrite "running" / the error line.
+					DispatcherPriority.Normal ),
+				out var error,
+				out var notes );
+			return (Ok: ok, Error: error, Notes: notes);
 		} );
 
-		if ( !requirements.Met )
+		if ( !prepared.Ok )
 		{
-			await Fail( target, "Container cannot start",
-				"This host cannot start a pressure-vessel container.\n\n"
-					+ string.Join( "\n", requirements.Problems ) );
+			await Fail( target, prepared.Error!.Title, prepared.Error.Message );
 			return false;
 		}
 
-		var compat = await Task.Run( () =>
-		{
-			var ready = SteamRt4Compat.Ensure( out var found );
-			return (Ready: ready, Problems: found);
-		} );
-
-		if ( !compat.Ready )
-		{
-			await Fail( target, "Compat libraries unavailable", string.Join( "\n", compat.Problems ) );
-			return false;
-		}
-
-		// Editor-only shims (libpcre2-16 for Qt): seeded when the host has
-		// them, noted when it does not - but the game needs none of these, so
-		// a miss must never block the launch. The note is transient (the
-		// status line moves on to "running"); the durable explanation lives
+		// Editor-only shim misses never block the launch. The note is transient
+		// (the status line moves on to "running"); the durable explanation lives
 		// in the dependency check.
-		var extras = await Task.Run( () =>
-		{
-			var ok = SteamRt4Compat.EnsureBestEffort( out var notes );
-			return (Ok: ok, Notes: notes);
-		} );
-
-		if ( !extras.Ok )
-			statusText.Text = target.Name + ": no Qt shim (" + string.Join( "; ", extras.Notes ) + ")";
-
-		var cache = SteamRt4Compat.CacheDirectory;
-
-		env["SBOX_IN_STEAMRT4"] = "1";
-		env["SBOX_STEAMRT4_COMPAT"] = cache;
-
-		// TERM is added here rather than left to the emulator: this one is set on
-		// launch-client's own environment, and the child does not inherit it. It
-		// is handed over unconditionally - in background mode there is no tty, so
-		// the engine suppresses colour regardless of what TERM says.
-		var passed = new Dictionary<string, string>( env ) { ["TERM"] = ProcessRunner.Term };
-
-		command.AddRange( SteamLauncherService.Wrap(
-			install,
-			new[] { install.RunScript, "--filesystem=" + cache, "--", script },
-			root,
-			passed ) );
+		if ( prepared.Notes.Count > 0 )
+			statusText.Text = target.Name + ": no Qt shim (" + string.Join( "; ", prepared.Notes ) + ")";
 
 		return true;
 	}
-
-	/// <summary>
-	/// True when the built shim library exists and is newer than its source,
-	/// so a source edit rebuilds instead of silently shipping a stale .so.
-	/// </summary>
-	private static bool ShimUpToDate( string? src, string? so )
-	{
-		try
-		{
-			if ( string.IsNullOrEmpty( src ) || string.IsNullOrEmpty( so ) ) return false;
-			if ( !File.Exists( so ) ) return false;
-			return File.GetLastWriteTimeUtc( so ) >= File.GetLastWriteTimeUtc( src );
-		}
-		catch { return false; }
-	}
-
 
 	/// The case-insensitive asset fallback needs its helper library built
 	/// (vendored source at apps/patches/casefold.c, built .so in the ampersand
@@ -892,19 +772,16 @@ internal sealed class MainWindow : Window
 	/// </summary>
 	private async Task<bool> EnsureCasefoldShimAsync( string root, LaunchTarget target )
 	{
-		if ( casefoldFix.IsChecked != true || target.ScriptFile == "sbox-server.sh" )
+		if ( casefoldFix.IsChecked != true || target.ScriptFile == LaunchComposer.ServerScript )
 			return true;
 
-		var so = Environment.GetEnvironmentVariable( "SBOX_CASEFOLD_SO" );
-		if ( string.IsNullOrWhiteSpace( so ) )
-			so = AppPaths.CasefoldLibrary;
-		var src = AppPaths.FindCasefoldSource();
-		if ( src is null )
+		switch ( LaunchComposer.CheckCasefoldShim( out var so, out var src ) )
 		{
-			return File.Exists( so );
+			case CasefoldShimState.Ready:
+				return true;
+			case CasefoldShimState.Unavailable:
+				return false;
 		}
-		if ( ShimUpToDate( src, so ) )
-			return true;
 
 		var build = await ConfirmDialog.Show( this, "Casefold shim missing or out of date",
 			"Casefold is enabled, but its helper library is missing or older than its source:\n"
@@ -917,53 +794,13 @@ internal sealed class MainWindow : Window
 			return false;
 		}
 
-		try { Directory.CreateDirectory( Path.GetDirectoryName( so )! ); } catch { }
-
 		statusText.Text = target.Name + ": building casefold shim...";
 		UpdateStatusBar();
 
-		var srcDir = Path.GetDirectoryName( src )!;
-		var srcFile = Path.GetFileName( src );
-		var (exit, output) = await Task.Run( () =>
+		var failure = await Task.Run( () => LaunchComposer.BuildCasefoldShim( so, src! ) );
+		if ( failure is not null )
 		{
-			using var proc = new Process
-			{
-				StartInfo = new ProcessStartInfo
-				{
-					FileName = "gcc",
-					WorkingDirectory = srcDir,
-					UseShellExecute = false,
-					RedirectStandardOutput = true,
-					RedirectStandardError = true
-				}
-			};
-			foreach ( var arg in new[] { "-D_GNU_SOURCE", "-shared", "-fPIC", "-O2", "-o", so, srcFile, "-ldl" } )
-				proc.StartInfo.ArgumentList.Add( arg );
-			try
-			{
-				proc.Start();
-			}
-			catch ( System.ComponentModel.Win32Exception e )
-			{
-				// gcc itself is missing.
-				return (-1, e.Message);
-			}
-			// gcc output is small; drain stdout first, then wait, then stderr.
-			var stdout = proc.StandardOutput.ReadToEnd();
-			proc.WaitForExit();
-			var stderr = proc.StandardError.ReadToEnd();
-			return (proc.ExitCode, (stdout + "\n" + stderr).Trim());
-		} );
-
-		if ( exit == -1 )
-		{
-			await Fail( target, "gcc not found",
-				"Could not start gcc: " + output + "\n\nInstall gcc to build the shim, or untick Casefold." );
-			return false;
-		}
-		if ( exit != 0 || !File.Exists( so ) )
-		{
-			await Fail( target, "Shim build failed", "gcc exited with code " + exit + ":\n\n" + output );
+			await Fail( target, failure.Title, failure.Message );
 			return false;
 		}
 		return true;
