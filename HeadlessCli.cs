@@ -32,14 +32,16 @@ namespace Ampersand;
 /// <c>--launch TARGET --project P --wait-ready</c> and attach afterwards.
 ///
 /// Composition is HeadlessLaunch's (script lookup, the persisted global
-/// toggles) plus three things the CLI needs and a launch does not: DOTNET_ROOT
-/// (the engine's own .NET, harmless on the host and the only option for a hand
-/// run inside a container, where there is no system .NET and sbox-cli is a
-/// framework-dependent apphost); SBOX_CLI_CWD, because the script changes into
-/// it before exec so a relative project argument means what the caller meant;
-/// and SBOX_TRACE=0, because sourcing _common.sh would otherwise trace every
-/// step to stderr and pollute output a caller is parsing. Casefold is not
-/// enabled here: no engine is started from --cli, so the shim has no consumer.
+/// toggles) plus three things the CLI needs and a host launch does not:
+/// DOTNET_ROOT (the engine's own .NET, harmless on the host and the only
+/// option for a hand run inside a container, where there is no system .NET
+/// and sbox-cli is a framework-dependent apphost; a container launch gets
+/// it from _common.sh's sbox_exec instead); SBOX_CLI_CWD, because the script
+/// changes into it before exec so a relative project argument means what the
+/// caller meant; and SBOX_TRACE=0, because sourcing _common.sh would otherwise
+/// trace every step to stderr and pollute output a caller is parsing. Casefold
+/// is not enabled here: no engine is started from --cli, so the shim has no
+/// consumer.
 /// ICU is the script's business - it points
 /// DOTNET_SYSTEM_GLOBALIZATION_APPLOCALICU at the ICU shipped beside the
 /// engine's runtime, which a container needs and the host ignores. The child
@@ -221,11 +223,11 @@ internal static class HeadlessCli
 		// does not change that - it exists only for a future header edit.
 		var env = LaunchComposer.BaseEnvironment( root, false, SboxSettings.GetInputDebug() );
 
-		// Only this mode sets DOTNET_ROOT. sbox-cli is a framework-dependent
-		// apphost; on the host the system .NET runs it, inside a container
-		// there is none and the engine's own runtime is the only option.
-		// Deliberately not part of BaseEnvironment or _common.sh: the
-		// editor's own sbox-cli invocations must stay untouched.
+		// Only this mode sets DOTNET_ROOT in the launcher's own
+		// environment. sbox-cli is a framework-dependent apphost and
+		// --cli runs on the host, where no launch sets it; container
+		// launches get it, and the ICU variable, from _common.sh's
+		// sbox_exec instead.
 		env["DOTNET_ROOT"] = Path.GetFullPath( Path.Combine( root, "game", "bin", "dotnet" ) );
 
 		// sbox-cli resolves a relative project argument against its working

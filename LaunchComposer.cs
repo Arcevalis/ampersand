@@ -66,7 +66,8 @@ internal static class LaunchComposer
 	/// &lt;root&gt;/game/bin/managed/sbox-cli. It is a .NET apphost, so on the
 	/// host it needs a system .NET, and inside the Steam runtime container
 	/// DOTNET_ROOT must point at the engine's own runtime (the container has
-	/// none). The caller decides what to do when it is missing.
+	/// none) - _common.sh sets that for container launches. The caller
+	/// decides what to do when it is missing.
 	/// </summary>
 	public static string CliPath( string root )
 		=> Path.GetFullPath( Path.Combine( EnginePath( root ), CliRelativePath ) );

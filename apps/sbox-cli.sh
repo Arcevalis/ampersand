@@ -34,29 +34,11 @@ if [ ! -x "$cli" ]; then
 	exit 1
 fi
 
-# sbox-cli is a framework-dependent .NET apphost. On the host the system .NET
-# runs it; the engine's own runtime is preferred so the CLI matches the runtime
-# the engine ships, and it is the only option for a hand run inside a container,
-# where there is no system .NET at all.
-export DOTNET_ROOT="${DOTNET_ROOT:-$GAME_DIR/bin/dotnet}"
-
-# CoreCLR will not start without an ICU ("Couldn't find a valid ICU package
-# installed on the system"), and a container has none. This is the same option
-# the engine's launchers bake in for linux-x64
-# (engine/Launcher/Directory.Build.targets, System.Globalization.AppLocalIcu),
-# pointed at the ICU StageLinuxRuntime puts next to CoreCLR. Harmless on the
-# host, which would otherwise fall back to the system ICU. Left unset when
-# there is no ICU beside the runtime.
-if [ -z "${DOTNET_SYSTEM_GLOBALIZATION_APPLOCALICU:-}" ]; then
-	for _icu in "$DOTNET_ROOT"/shared/Microsoft.NETCore.App/*/libicuuc.so.*; do
-		if [ -f "$_icu" ]; then
-			DOTNET_SYSTEM_GLOBALIZATION_APPLOCALICU="${_icu##*libicuuc.so.}"
-			export DOTNET_SYSTEM_GLOBALIZATION_APPLOCALICU
-			break
-		fi
-	done
-	unset _icu
-fi
+# sbox-cli is a framework-dependent .NET apphost, so it needs DOTNET_ROOT and
+# an ICU. With no argument the helper points it at the engine's own runtime,
+# so the CLI matches the runtime the engine ships (and that is the only option
+# in a container), and at the ICU beside it. Values the caller set are kept.
+sbox_dotnet_env
 
 # sbox-cli resolves a relative project argument against its working directory.
 # The launcher already runs us in the caller's folder, so this cd is a no-op;

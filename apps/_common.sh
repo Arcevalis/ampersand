@@ -30,6 +30,13 @@
 #                Ordinary environment variables cross the container boundary
 #                but LD_LIBRARY_PATH does not, which is why it is appended
 #                here - inside - rather than exported by the launcher.
+#
+#   DOTNET_ROOT / DOTNET_SYSTEM_GLOBALIZATION_APPLOCALICU
+#                are exported by sbox_dotnet_env, and only for Steam runtime
+#                launches (sbox_exec under SBOX_IN_STEAMRT4=1): the container
+#                ships neither .NET nor an ICU, and the sbox-cli the editor
+#                spawns inherits this environment. sbox-cli.sh calls the same
+#                helper on the host, keeping values the caller set.
 
 set -eu
 
@@ -65,6 +72,43 @@ fi
 GAME_DIR="$ROOT/game"
 NATIVE_DIR="$GAME_DIR/bin/linuxsteamrt64"
 
+# Points a framework-dependent .NET apphost at a runtime and, where needed, at
+# an ICU. sbox-cli (game/bin/managed/sbox-cli) is one, and unlike sbox-dev and
+# sbox-launcher it carries no embedded runtime hint: BuildManaged passes
+# -p:AppHostRelativeDotNet=bin/dotnet to those, not to the sbox-cli build. So
+# it needs DOTNET_ROOT wherever there is no system .NET, and CoreCLR also needs
+# an ICU - the container has none - so this points
+# DOTNET_SYSTEM_GLOBALIZATION_APPLOCALICU at the ICU StageLinuxRuntime puts
+# next to CoreCLR. That is the same option the engine's launchers bake in via
+# engine/Launcher/Directory.Build.targets (System.Globalization.AppLocalIcu).
+#
+# force = always the engine's runtime and a freshly detected ICU. Container
+# launches use it because an inherited DOTNET_ROOT from Steam's environment
+# could name a host path or a runtime without that ICU. No argument = respect
+# values the caller already set (sbox-cli.sh's hand-run behaviour). The ICU
+# variable is left unset when no libicuuc.so.* sits beside the runtime.
+sbox_dotnet_env()
+{
+	if [ "${1:-}" = force ]; then
+		DOTNET_ROOT="$GAME_DIR/bin/dotnet"
+		unset DOTNET_SYSTEM_GLOBALIZATION_APPLOCALICU
+	else
+		DOTNET_ROOT="${DOTNET_ROOT:-$GAME_DIR/bin/dotnet}"
+	fi
+	export DOTNET_ROOT
+
+	if [ -z "${DOTNET_SYSTEM_GLOBALIZATION_APPLOCALICU:-}" ]; then
+		for _icu in "$DOTNET_ROOT"/shared/Microsoft.NETCore.App/*/libicuuc.so.*; do
+			if [ -f "$_icu" ]; then
+				DOTNET_SYSTEM_GLOBALIZATION_APPLOCALICU="${_icu##*libicuuc.so.}"
+				export DOTNET_SYSTEM_GLOBALIZATION_APPLOCALICU
+				break
+			fi
+		done
+		unset _icu
+	fi
+}
+
 sbox_exec()
 {
 	_exe_name="$1"
@@ -85,6 +129,18 @@ sbox_exec()
 	LD_PRELOAD="$_harfbuzz${LD_PRELOAD:+:$LD_PRELOAD}"
 	LD_LIBRARY_PATH="$NATIVE_DIR${SBOX_STEAMRT4_COMPAT:+:$SBOX_STEAMRT4_COMPAT}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 	export LD_PRELOAD LD_LIBRARY_PATH
+
+	# The editor runs game/bin/managed/sbox-cli itself (Preferences > AI
+	# Agents, the startup skill prompt) and its child inherits this
+	# environment. Inside the Steam runtime there is no .NET and no ICU,
+	# so without this it fails with "Couldn't run sbox-cli" (see
+	# docs/notes.md). Host launches are left alone: the system .NET works
+	# there, and an app-local ICU value would leak into every child of the
+	# editor (IDEs, other .NET tools) that runs on a runtime without that
+	# ICU.
+	if [ "${SBOX_IN_STEAMRT4:-0}" = "1" ]; then
+		sbox_dotnet_env force
+	fi
 
 	# Case-insensitive asset fallback for wrong-case references committed
 	# upstream (citizen .vmdl files referencing lowercase FBX paths that only

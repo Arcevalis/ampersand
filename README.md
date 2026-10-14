@@ -334,7 +334,8 @@ start an engine on the host, outside the container. Use
   copied to `<OutDir>/scripts/` at build time, or `usr/bin/scripts/` in the
   AppImage. They stay loose files so you can edit them and the next launch
   picks it up. `_common.sh` sets the HarfBuzz `LD_PRELOAD`, library paths and
-  `QT_QPA_PLATFORM=xcb` workarounds; `sbox-server.sh` intentionally skips the
+  `QT_QPA_PLATFORM=xcb` workarounds, and `DOTNET_ROOT` plus the ICU variable
+  for Steam runtime launches; `sbox-server.sh` intentionally skips the
   desktop-UI workarounds.
 - **The container is entered through Steam.** `SteamLauncherService` +
   `SteamRt4Runtime` refuse to build a container command unless the Steam client
@@ -386,6 +387,6 @@ bootstrap.sh            # dev build shortcut (dotnet build -c Release)
 | `Steam is not running` | Container entry goes through Steam's launcher service. Start the client first. |
 | `HRESULT: 0x80008088` | Missing `libunwind` inside steamrt4. Run **Check for missing dependencies** and do one containerised launch to seed the shim cache. |
 | `No terminal emulator found` | Install one (`gnome-terminal`, `konsole`, `alacritty`, `kitty`, `foot`, `xterm`), or untick *Launch with system terminal* to run headless with log capture. |
-| `Preferences > AI Agents` shows `Couldn't run sbox-cli` | Editor launched into the Steam runtime: that container has neither .NET nor ICU, so sbox-cli's apphost aborts before it starts. Investigated, not fixed; see `docs/notes.md`. |
+| `Preferences > AI Agents` shows `Couldn't run sbox-cli` | Ampersand's Steam runtime launches now set `DOTNET_ROOT` and the ICU variable for the editor and its `sbox-cli` child (`apps/_common.sh`). If it still shows, the editor was started in the container some other way, or Ampersand's built scripts are stale - rebuild (see `docs/notes.md`). |
 | AppImage won't run (`fuse` errors) | Install `fuse2`/`libfuse2`, or extract once: `./Ampersand-x86_64.AppImage --appimage-extract` and run `squashfs-root/AppRun`. |
 | Rebuild fails with `Text file busy` | The target AppImage is still running. Quit it and run `install-appimage.sh` again (the script checks for this first). |
