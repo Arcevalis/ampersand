@@ -103,7 +103,7 @@ sbox_exec()
 		if [ ! -f "$_casefold_so" ]; then
 			echo "error: SBOX_CASEFOLD=$SBOX_CASEFOLD but casefold shim missing at $_casefold_so" >&2
 			echo "launch once via Ampersand with Casefold ticked to build it," >&2
-			echo "or build it by hand: gcc -D_GNU_SOURCE -shared -fPIC -O2 -o libcasefold.so casefold.c -ldl" >&2
+			echo "or build it by hand: gcc -shared -fPIC -O2 -o libcasefold.so casefold.c -ldl" >&2
 			exit 1
 		fi
 		LD_PRELOAD="$LD_PRELOAD:$_casefold_so"

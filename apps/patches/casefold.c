@@ -13,11 +13,21 @@
 // "Casefold" toggle (off by default), override location with SBOX_CASEFOLD_SO,
 // diagnostics with CASEFOLD_VERBOSE=1.
 //
-// Strategy: call through to libc first. Only when the call fails with ENOENT
-// (and, for opens, the caller is not creating the file) the path is re-walked
-// component-by-component, matching each directory entry case-insensitively,
-// and the call is retried exactly once. Zero overhead on the hit path, and the
-// tree on disk is never modified.
+// Strategy: call through to libc first, and only for READS. When open/fopen
+// fails with ENOENT (and the caller is not creating the file) the path is
+// re-walked component-by-component, trying the exact spelling first and then
+// the case-insensitive siblings, and the call is retried exactly once. A dead
+// end backtracks to the case twin: s&box publishes compiled outputs into a
+// lowercased tree, so the exact name can exist and still be the wrong branch
+// (a lowercase `smarttrousers/` output directory shadowing `SmartTrousers/`,
+// where the referenced FBX actually lives). Zero overhead on the hit path, and
+// the tree on disk is never modified.
+//
+// The stat family (stat, lstat, access, statx) deliberately stays exact. The
+// managed content builder asks "does this output exist?" and then renames it; a
+// stat answered through the case twin makes that rename fail on the path that
+// is really there, which broke every model publish. Reads still fall back, and
+// that is where the compilers load FBX and generated-child .meta references.
 
 #define _GNU_SOURCE
 
@@ -91,20 +101,37 @@ static int verbose( void )
 // Case-insensitive path resolution
 // ---------------------------------------------------------------------------
 
-// Re-walk `path`, matching each component case-insensitively when the exact
-// name is absent. Relative paths resolve against the process cwd (which is
-// what AT_FDCWD callers mean). Returns 0 and fills `out` on success, -1 with
-// errno == ENOENT when any component has no case-insensitive match.
-static int casefold_resolve( const char *path, char *out )
+// Join `prefix` and `name` into `out`. Kept separate because the prefix may
+// alias the source when it is the same buffer; never snprintf over itself.
+static int casefold_join( const char *prefix, const char *name, char *out, size_t size )
 {
-	ensure_binds();
-	// resolve itself only needs real_lstat; every caller already ensured,
-	// but re-check: a still-NULL binding fails safe instead of crashing.
-	if ( !real_lstat )
-	{
-		errno = ENOENT;
-		return -1;
-	}
+	int n;
+	if ( prefix[0] == '\0' || ( prefix[0] == '.' && prefix[1] == '\0' ) )
+		n = snprintf( out, size, "./%s", name );
+	else if ( prefix[0] == '/' && prefix[1] == '\0' )
+		n = snprintf( out, size, "/%s", name );
+	else
+		n = snprintf( out, size, "%s/%s", prefix, name );
+	return n < 0 || (size_t)n >= size ? -1 : n;
+}
+
+// True when more path components follow `rest` (strtok_r's cursor), so a
+// directory component can be treated differently from the last one.
+static int casefold_has_more( const char *rest )
+{
+	if ( rest == NULL ) return 0;
+	for ( ; *rest; rest++ )
+		if ( *rest != '/' ) return 1;
+	return 0;
+}
+
+// One linear pass over the components. The exact-first pass takes each
+// component as written and only matches a sibling case-insensitively when the
+// written spelling is missing. The twin pass prefers a sibling with a
+// different spelling, which is what unshadows the case twin of a directory
+// that exists but does not contain the rest of the path.
+static int casefold_pass( const char *path, int exact_first, char *out )
+{
 	char work[PATH_MAX];
 	size_t pathLen = strlen( path );
 	if ( pathLen == 0 || pathLen >= sizeof( work ) )
@@ -114,9 +141,8 @@ static int casefold_resolve( const char *path, char *out )
 	}
 	memcpy( work, path, pathLen + 1 );
 
-	// `cur` accumulates the resolved prefix.
 	char cur[PATH_MAX];
-	if ( work[0] == '/' )
+	if ( path[0] == '/' )
 	{
 		cur[0] = '/';
 		cur[1] = '\0';
@@ -131,73 +157,83 @@ static int casefold_resolve( const char *path, char *out )
 		comp != NULL;
 		comp = strtok_r( NULL, "/", &save ) )
 	{
-		if ( comp[0] == '\0' || (comp[0] == '.' && comp[1] == '\0') )
+		if ( comp[0] == '\0' || ( comp[0] == '.' && comp[1] == '\0' ) )
 			continue;
 
 		char candidate[PATH_MAX];
-		int need = snprintf( candidate, sizeof( candidate ), "%s/%s",
-			cur[0] == '\0' ? "." : cur, comp );
-		if ( need < 0 || (size_t)need >= sizeof( candidate ) )
+		if ( casefold_join( cur, comp, candidate, sizeof( candidate ) ) < 0 )
 		{
 			errno = ENOENT;
 			return -1;
 		}
 
 		struct stat st;
-		if ( real_lstat( candidate, &st ) == 0 )
-		{
-			memcpy( cur, candidate, (size_t)need + 1 );
-			continue;
-		}
+		int exactExists = real_lstat( candidate, &st ) == 0;
 
-		// Exact name missing: scan the parent directory case-insensitively.
-		const char *parent = cur[0] == '\0' ? "." : cur;
-		DIR *dir = opendir( parent );
-		if ( !dir )
-		{
-			errno = ENOENT;
-			return -1;
-		}
+		// The last component keeps the exact spelling when it exists: a twin
+		// directory may also hold a differently-cased copy of the same file,
+		// and the path as written means that one. Every earlier component is
+		// a directory on the way, so the retry may prefer its case twin.
+		int last = !casefold_has_more( save );
 
-		const char *match = NULL;
-		// Stack buffer, not static: resourcecompiler resolves assets on
-		// worker threads and a shared buffer would race between concurrent
-		// fallbacks. `match` is consumed below before this function returns.
-		char matched[NAME_MAX + 1];
-		struct dirent *entry;
-		while ( (entry = readdir( dir )) != NULL )
+		if ( !( last && exactExists ) && ( !exact_first || !exactExists ) )
 		{
-			if ( strcasecmp( entry->d_name, comp ) == 0 )
+			DIR *dir = opendir( cur );
+			if ( !dir )
 			{
+				errno = ENOENT;
+				return -1;
+			}
+
+			char alt[NAME_MAX + 1];
+			int haveAlt = 0;
+			struct dirent *entry;
+			while ( ( entry = readdir( dir ) ) != NULL )
+			{
+				if ( strcmp( entry->d_name, comp ) == 0 ) continue;
+				if ( strcasecmp( entry->d_name, comp ) != 0 ) continue;
+
 				size_t nameLen = strlen( entry->d_name );
 				if ( nameLen <= NAME_MAX )
 				{
-					memcpy( matched, entry->d_name, nameLen + 1 );
-					match = matched;
+					memcpy( alt, entry->d_name, nameLen + 1 );
+					haveAlt = 1;
 				}
 				break;
 			}
-		}
-		closedir( dir );
+			closedir( dir );
 
-		if ( !match )
+			if ( haveAlt )
+			{
+				char twin[PATH_MAX];
+				if ( casefold_join( cur, alt, twin, sizeof( twin ) ) < 0 )
+				{
+					errno = ENOENT;
+					return -1;
+				}
+
+				if ( real_lstat( twin, &st ) == 0 )
+					memcpy( candidate, twin, strlen( twin ) + 1 );
+				else if ( !exactExists )
+				{
+					errno = ENOENT;
+					return -1;
+				}
+			}
+			else if ( !exactExists )
+			{
+				errno = ENOENT;
+				return -1;
+			}
+		}
+
+		size_t candidateLen = strlen( candidate );
+		if ( candidateLen == 0 || candidateLen >= sizeof( cur ) )
 		{
 			errno = ENOENT;
 			return -1;
 		}
-
-		// Join into a scratch buffer: parent aliases cur, and snprintf
-		// with overlapping source/destination is undefined behavior that
-		// truncates on current glibc (yields "/<match>", dropping the prefix).
-		char next[PATH_MAX];
-		need = snprintf( next, sizeof( next ), "%s/%s",
-			parent[0] == '\0' ? "." : parent, match );
-		if ( need < 0 || (size_t)need >= sizeof( next ) )
-		{
-			errno = ENOENT;
-			return -1;
-		}
-		memcpy( cur, next, (size_t)need + 1 );
+		memcpy( cur, candidate, candidateLen + 1 );
 	}
 
 	size_t curLen = strlen( cur );
@@ -207,15 +243,45 @@ static int casefold_resolve( const char *path, char *out )
 		return -1;
 	}
 	memcpy( out, cur, curLen + 1 );
+	return 0;
+}
+
+// Returns 0 and fills `out` on success, -1 with errno == ENOENT when no
+// spelling of the path resolves.
+
+static int casefold_resolve( const char *path, char *out )
+{
+	ensure_binds();
+	// The walk only needs lstat; every caller already ensured the bindings,
+	// but re-check: a still-NULL binding fails safe instead of crashing.
+	if ( !real_lstat )
+	{
+		errno = ENOENT;
+		return -1;
+	}
+
+	// Exact spelling first: the common fallback only has a wrongly-cased leaf.
+	// A dead end is retried with the case twins, because s&box publishes
+	// compiled outputs into a lowercased tree - the exact name can exist and
+	// still be the wrong branch (a lowercase `smarttrousers/` output directory
+	// shadowing `SmartTrousers/`, where the referenced FBX actually lives).
+	if ( casefold_pass( path, 1, out ) != 0 && casefold_pass( path, 0, out ) != 0 )
+	{
+		errno = ENOENT;
+		return -1;
+	}
 
 	if ( verbose() )
 		fprintf( stderr, "[casefold] %s -> %s\n", path, out );
 	return 0;
 }
 
+
+
 // ---------------------------------------------------------------------------
 // Interposed calls: try libc first, fall back exactly once on ENOENT.
-// Creates (O_CREAT/O_TMPFILE, write-mode fopen) never fall back.
+// Creates (O_CREAT/O_TMPFILE, write-mode fopen) never fall back, and the stat
+// family is exact (see the strategy note at the top).
 // ---------------------------------------------------------------------------
 
 int open( const char *path, int flags, ... )
@@ -365,110 +431,47 @@ int stat( const char *path, struct stat *buf )
 {
 	ensure_binds();
 	if ( !real_stat ) { errno = ENOSYS; return -1; }
-	int rc = real_stat( path, buf );
-	if ( rc != 0 && errno == ENOENT )
-	{
-		char resolved[PATH_MAX];
-		if ( casefold_resolve( path, resolved ) == 0 )
-			rc = real_stat( resolved, buf );
-		else
-			errno = ENOENT;
-	}
-	return rc;
+	return real_stat( path, buf );
 }
 
 int lstat( const char *path, struct stat *buf )
 {
 	ensure_binds();
 	if ( !real_lstat ) { errno = ENOSYS; return -1; }
-	int rc = real_lstat( path, buf );
-	if ( rc != 0 && errno == ENOENT )
-	{
-		char resolved[PATH_MAX];
-		if ( casefold_resolve( path, resolved ) == 0 )
-			rc = real_lstat( resolved, buf );
-		else
-			errno = ENOENT;
-	}
-	return rc;
+	return real_lstat( path, buf );
 }
 
 int access( const char *path, int mode )
 {
 	ensure_binds();
 	if ( !real_access ) { errno = ENOSYS; return -1; }
-	int rc = real_access( path, mode );
-	if ( rc != 0 && errno == ENOENT )
-	{
-		char resolved[PATH_MAX];
-		if ( casefold_resolve( path, resolved ) == 0 )
-			rc = real_access( resolved, mode );
-		else
-			errno = ENOENT;
-	}
-	return rc;
+	return real_access( path, mode );
 }
 
 int stat64( const char *path, struct stat64 *buf )
 {
 	ensure_binds();
 	if ( !real_stat64 ) { errno = ENOSYS; return -1; }
-	int rc = real_stat64( path, buf );
-	if ( rc != 0 && errno == ENOENT )
-	{
-		char resolved[PATH_MAX];
-		if ( casefold_resolve( path, resolved ) == 0 )
-			rc = real_stat64( resolved, buf );
-		else
-			errno = ENOENT;
-	}
-	return rc;
+	return real_stat64( path, buf );
 }
 
 int lstat64( const char *path, struct stat64 *buf )
 {
 	ensure_binds();
 	if ( !real_lstat64 ) { errno = ENOSYS; return -1; }
-	int rc = real_lstat64( path, buf );
-	if ( rc != 0 && errno == ENOENT )
-	{
-		char resolved[PATH_MAX];
-		if ( casefold_resolve( path, resolved ) == 0 )
-			rc = real_lstat64( resolved, buf );
-		else
-			errno = ENOENT;
-	}
-	return rc;
+	return real_lstat64( path, buf );
 }
 
 int faccessat( int dirfd, const char *path, int mode, int flags )
 {
 	ensure_binds();
 	if ( !real_faccessat ) { errno = ENOSYS; return -1; }
-	int rc = real_faccessat( dirfd, path, mode, flags );
-	if ( rc != 0 && errno == ENOENT && openat_may_fallback( dirfd, path ) )
-	{
-		char resolved[PATH_MAX];
-		if ( casefold_resolve( path, resolved ) == 0 )
-			rc = real_faccessat( dirfd, resolved, mode, flags );
-		else
-			errno = ENOENT;
-	}
-	return rc;
+	return real_faccessat( dirfd, path, mode, flags );
 }
 
 int statx( int dirfd, const char *path, int flags, unsigned int mask, struct statx *bufx )
 {
 	ensure_binds();
 	if ( !real_statx ) { errno = ENOSYS; return -1; }
-	int rc = real_statx( dirfd, path, flags, mask, bufx );
-	if ( rc != 0 && errno == ENOENT && openat_may_fallback( dirfd, path ) )
-	{
-		char resolved[PATH_MAX];
-		if ( casefold_resolve( path, resolved ) == 0 )
-			rc = real_statx( dirfd, resolved, flags, mask, bufx );
-		else
-			errno = ENOENT;
-	}
-	return rc;
+	return real_statx( dirfd, path, flags, mask, bufx );
 }

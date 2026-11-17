@@ -169,6 +169,14 @@ Per-target toggles:
 Global toggles (persisted in settings, take effect on next launch):
 
 - **Casefold**: case-insensitive fallback for wrong-case asset references.
+  On Linux the content step needs it: the native model compiler opens FBX and
+  child-model `.meta` references at the case they were authored with, and the
+  engine content has several that only resolve on a case-insensitive
+  filesystem. Leave it off and Build S&Box reports those models as failed
+  (the build prints a hint saying so). Textures are covered separately by the
+  case aliases Build S&Box creates, which work either way. For a raw `sh Setup.sh` outside
+  Ampersand, put the shim in the environment yourself:
+  `LD_PRELOAD=~/.cache/sbox-ampersand/libcasefold.so sh Setup.sh`.
 - **Input debug**: engine input diagnostics (`SBOX_INPUT_DEBUG`), so the flag
   no longer has to be in Ampersand's own environment at startup.
 
@@ -185,7 +193,15 @@ Ampersand passes it as `+game <value>`.
   dependency report over `game/bin/linuxsteamrt64`. Runs in your terminal via
   `ampersand --bootstrap` (`--skip-deps` skips the report on the CLI); the log
   in `~/.cache/sbox-ampersand/logs/` keeps the exact command while the output
-  itself lives in the terminal window.
+  itself lives in the terminal window. Before `Setup.sh` it also gives every
+  wrongly-cased image source a lowercase symlink at its identity path, which
+  is where the native content compiler opens textures from (see
+  **Remove case aliases**).
+- **Remove case aliases**: deletes the lowercase image symlinks Build S&Box
+  leaves in the s&box checkout (Linux only). The dialog shows how many first;
+  only links Ampersand made are removed - never tracked files, the engine's
+  own links or compiled outputs - and the next build recreates them. The same
+  one-shot operation is `ampersand --revert-case-aliases`.
 - **Check for missing dependencies**: `ldd` sweep of
   `game/bin/linuxsteamrt64` plus the engine's bundled .NET runtime, on the
   **host and inside steamrt4**, plus the steamrt4 compat cache status. Runs via
@@ -210,6 +226,8 @@ binary inside your terminal emulator to keep SGR colour and column alignment:
 ```sh
 ampersand --dependency-check          # coloured host + container sweep
 ampersand --bootstrap [--skip-deps]   # engine Setup.sh + ldd report
+ampersand --case-aliases [--dry-run]  # prime the lowercase texture aliases
+ampersand --revert-case-aliases       # remove exactly those aliases
 ```
 
 ## How it works
@@ -245,7 +263,8 @@ SystemTerminal.cs       # emulator detection + per-emulator stay-attached flags,
 SteamRt4Runtime.cs      # find + validate the Steam Linux Runtime install
 SteamRt4Compat.cs       # libunwind + editor-only pcre2-16 shim cache for the container
 SteamLauncherService.cs # container entry through Steam's launcher service
-Bootstrap.cs            # Build S&Box: engine Setup.sh + ldd report
+Bootstrap.cs            # Build S&Box: case aliases, engine Setup.sh + ldd report
+CaseAliases.cs          # lowercase image-source aliases for the Linux content build
 DependencyCheck.cs      # host + container ldd sweep + shim report
 SboxSettings.cs         # persisted s&box path + server game (~/.local/share/…)
 RepoRoot.cs / AppPaths.cs / RunLog.cs / Ansi.cs / TerminalTheme.cs …
@@ -268,3 +287,4 @@ bootstrap.sh            # dev build shortcut (dotnet build -c Release)
 | `No terminal emulator found` | Install one (`gnome-terminal`, `konsole`, `alacritty`, `kitty`, `foot`, `xterm`), or untick *Launch with system terminal* to run headless with log capture. |
 | AppImage won't run (`fuse` errors) | Install `fuse2`/`libfuse2`, or extract once: `./Ampersand-x86_64.AppImage --appimage-extract` and run `squashfs-root/AppRun`. |
 | Rebuild fails with `Text file busy` | The target AppImage is still running. Quit it and run `install-appimage.sh` again (the script checks for this first). |
+| Content build: `LoadFromFile` failed or a texture path cannot be found | The native compiler opens a texture by its lowercased identity path while sources keep their authored case (the lowercased tree only holds compiled outputs). Ampersand aliases the sources before every build; if they were removed, run **Build S&Box** or `ampersand --case-aliases`. `SBOX_SKIP_CASE_ALIASES=1` disables the alias pass. |

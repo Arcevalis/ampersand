@@ -58,13 +58,29 @@ internal static class Bootstrap
 			emit( "" );
 		}
 
+		// --- lowercase source aliases (native content compiler case bug) ------
+		// The native resource compiler opens a texture by its lowercased
+		// identity path, while sources keep their authored case; the identity
+		// tree only holds published outputs, so a material whose properties
+		// point at a raw image cannot find it. Per-file image links fill that
+		// hole and are invisible to the ContentBuilder inventory (raw bitmaps
+		// are not sources it compiles). See CaseAliases.
+		var aliases = CaseAliases.Ensure( repoRoot, msg => emit( Ansi.Dim + "  " + msg + Ansi.Reset ) );
+		emit( ( aliases.Conflicts > 0 || aliases.Note is not null ? Ansi.Yellow : Ansi.Dim )
+			+ "  " + aliases.Describe() + Ansi.Reset );
+		emit( "" );
+
 		// --- engine setup (heavy lifting lives here) --------------------------
 		emit( Ansi.Bold + Ansi.Cyan + "--- sh Setup.sh ---" + Ansi.NoBold + Ansi.Reset );
 		// Case-insensitive asset fallback (opt-in Casefold toggle): export it
 		// around Setup.sh so the native content toolchain (contentbuilder and
-		// the resourcecompiler children it spawns) inherits it. Warn-and-
-		// continue without it when the library cannot be built - setup itself
-		// must never hard-fail on the compat layer.
+		// the resourcecompiler children it spawns) inherits it. The model
+		// compiler opens FBX/meta references at the case they were authored
+		// with, so without the shim the content step fails on the engine's
+		// wrong-case references. Warn-and-continue without it when the library
+		// cannot be built - setup itself must never hard-fail on the compat
+		// layer. The toggle stays optional; the hint below says what is at
+		// stake when it is off.
 		Dictionary<string, string>? setupEnv = null;
 		var casefoldSo = EnsureCasefoldLibrary( emit );
 		if ( casefoldSo is not null )
@@ -75,6 +91,11 @@ internal static class Bootstrap
 				["LD_PRELOAD"] = string.IsNullOrEmpty( existing ) ? casefoldSo : casefoldSo + ":" + existing
 			};
 			emit( Ansi.Dim + "  casefold shim: " + casefoldSo + Ansi.Reset );
+		}
+		else if ( OperatingSystem.IsLinux() )
+		{
+			emit( Ansi.Dim + "  casefold: off - wrong-case FBX references in the engine content will fail the"
+				+ " content step (tick Casefold to enable the shim)" + Ansi.Reset );
 		}
 		// Via sh, not ./. : Setup.sh is stored without the exec bit upstream.
 		var setupCode = RunProcess( "sh", new[] { "Setup.sh" }, repoRoot, emit, setupEnv );
@@ -169,15 +190,16 @@ internal static class Bootstrap
 
 		var overrideSo = Environment.GetEnvironmentVariable( "SBOX_CASEFOLD_SO" );
 		var so = string.IsNullOrWhiteSpace( overrideSo ) ? AppPaths.CasefoldLibrary : overrideSo;
-		if ( File.Exists( so ) )
-			return so;
-
 		var src = AppPaths.FindCasefoldSource();
 		if ( src is null )
 		{
+			// No source to compare against: a prebuilt copy is all there is.
+			if ( File.Exists( so ) ) return so;
 			emit( Ansi.Yellow + "  casefold: vendored source missing (scripts/patches/casefold.c) - continuing without the fallback" + Ansi.Reset );
 			return null;
 		}
+		if ( File.Exists( so ) && AppPaths.IsShimUpToDate( src, so ) )
+			return so;
 
 		try { Directory.CreateDirectory( Path.GetDirectoryName( so )! ); } catch { }
 
@@ -192,7 +214,7 @@ internal static class Bootstrap
 				RedirectStandardOutput = true,
 				RedirectStandardError = true,
 			};
-			foreach ( var arg in new[] { "-D_GNU_SOURCE", "-shared", "-fPIC", "-O2", "-o", so, Path.GetFileName( src ), "-ldl" } )
+			foreach ( var arg in new[] { "-shared", "-fPIC", "-O2", "-o", so, Path.GetFileName( src ), "-ldl" } )
 				psi.ArgumentList.Add( arg );
 			using var proc = Process.Start( psi );
 			if ( proc is null )

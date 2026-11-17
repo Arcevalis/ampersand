@@ -96,4 +96,20 @@ internal static class AppPaths
 	/// scripts/patches/ at build time), or null if this install lacks it.
 	/// </summary>
 	public static string? FindCasefoldSource() => FindScript( Path.Combine( "patches", "casefold.c" ) );
+
+	/// <summary>
+	/// True when a built shim is at least as new as its vendored source. Both
+	/// the GUI (before a launch) and Bootstrap (before Setup.sh) use this so an
+	/// edited casefold.c is never shadowed by a stale cache copy.
+	/// </summary>
+	public static bool IsShimUpToDate( string? source, string? library )
+	{
+		try
+		{
+			if ( string.IsNullOrEmpty( source ) || string.IsNullOrEmpty( library ) ) return false;
+			if ( !File.Exists( library ) ) return false;
+			return File.GetLastWriteTimeUtc( library ) >= File.GetLastWriteTimeUtc( source );
+		}
+		catch { return false; }
+	}
 }

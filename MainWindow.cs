@@ -27,6 +27,7 @@ internal sealed class MainWindow : Window
 	private readonly Button stopButton;
 	private readonly Button depCheckButton;
 	private readonly Button bootstrapButton;
+	private readonly Button revertAliasesButton;
 	private readonly Button logFolderButton;
 	private readonly TextBox sboxPathBox;
 	private readonly Button browsePathButton;
@@ -351,6 +352,14 @@ internal sealed class MainWindow : Window
 		bootstrapButton.Click += ( _, _ ) => RunBootstrap( skipDeps: false );
 		ToolTip.SetTip( bootstrapButton, "Run the engine Setup.sh, then an ldd dependency report" );
 
+		revertAliasesButton = SidebarButton( "Remove case aliases" );
+		revertAliasesButton.IsEnabled = OperatingSystem.IsLinux();
+		revertAliasesButton.Click += ( _, _ ) => RemoveCaseAliases();
+		ToolTip.SetTip( revertAliasesButton,
+			"Delete the lowercase image symlinks Ampersand creates before a build so the "
+			+ "Linux content compiler can find textures. Only those symlinks are removed - "
+			+ "nothing tracked is touched - and the next build recreates them." );
+
 		logFolderButton = SidebarButton( "Open log folder" );
 		logFolderButton.Click += ( _, _ ) => OpenLogFolder();
 
@@ -411,6 +420,7 @@ internal sealed class MainWindow : Window
 
 		var actions = new StackPanel();
 		actions.Children.Add( bootstrapButton );
+		actions.Children.Add( revertAliasesButton );
 		actions.Children.Add( depCheckButton );
 		actions.Children.Add( logFolderButton );
 
@@ -868,21 +878,6 @@ internal sealed class MainWindow : Window
 		return true;
 	}
 
-	/// <summary>
-	/// True when the built shim library exists and is newer than its source,
-	/// so a source edit rebuilds instead of silently shipping a stale .so.
-	/// </summary>
-	private static bool ShimUpToDate( string? src, string? so )
-	{
-		try
-		{
-			if ( string.IsNullOrEmpty( src ) || string.IsNullOrEmpty( so ) ) return false;
-			if ( !File.Exists( so ) ) return false;
-			return File.GetLastWriteTimeUtc( so ) >= File.GetLastWriteTimeUtc( src );
-		}
-		catch { return false; }
-	}
-
 
 	/// The case-insensitive asset fallback needs its helper library built
 	/// (vendored source at apps/patches/casefold.c, built .so in the ampersand
@@ -903,7 +898,7 @@ internal sealed class MainWindow : Window
 		{
 			return File.Exists( so );
 		}
-		if ( ShimUpToDate( src, so ) )
+		if ( AppPaths.IsShimUpToDate( src, so ) )
 			return true;
 
 		var build = await ConfirmDialog.Show( this, "Casefold shim missing or out of date",
@@ -937,7 +932,7 @@ internal sealed class MainWindow : Window
 					RedirectStandardError = true
 				}
 			};
-			foreach ( var arg in new[] { "-D_GNU_SOURCE", "-shared", "-fPIC", "-O2", "-o", so, srcFile, "-ldl" } )
+			foreach ( var arg in new[] { "-shared", "-fPIC", "-O2", "-o", so, srcFile, "-ldl" } )
 				proc.StartInfo.ArgumentList.Add( arg );
 			try
 			{
@@ -1154,6 +1149,71 @@ internal sealed class MainWindow : Window
 		catch ( Exception e )
 		{
 			statusText.Text = "bootstrap failed - " + e.Message;
+		}
+	}
+
+	/// <summary>
+	/// Removes the per-file image symlinks CaseAliases.Ensure leaves in the
+	/// s&amp;box checkout before a build. Only links Ampersand journaled are
+	/// deleted - the engine's own lowercase sibling links, real files and
+	/// compiled outputs stay - and the next build puts them back, so this is
+	/// the safe way out of the shim once the native compiler is fixed.
+	/// </summary>
+	private async void RemoveCaseAliases()
+	{
+		try
+		{
+			var root = GetSboxRoot();
+			if ( root is null )
+			{
+				await ConfirmDialog.Notify( this, "Repo root not found",
+					"ampersand could not locate the s&box tree - it expects game/ and engine/ "
+						+ "somewhere above this binary.\n\nUse Replace s&box path in the sidebar." );
+				return;
+			}
+
+			statusText.Text = "scanning case aliases...";
+			var pending = await Task.Run( () => CaseAliases.Revert( root, null, dryRun: true ) );
+			if ( pending.Links == 0 )
+			{
+				statusText.Text = "case aliases: none to remove";
+				await ConfirmDialog.Notify( this, "Nothing to remove",
+					"No case aliases created by Ampersand were found for this checkout.\n\n"
+						+ "They are made on Linux just before a build, so Build S&Box recreates "
+						+ "anything the content step needs." );
+				return;
+			}
+
+			var confirmed = await ConfirmDialog.Show( this, "Remove case aliases",
+				$"{pending.Links} image symlinks that Ampersand created so the Linux content "
+					+ "build can resolve lowercased texture paths.\n\n"
+					+ "Only those symlinks are deleted - tracked files, the engine's own links and "
+					+ "compiled outputs stay as they are. A build running right now may fail while "
+					+ "its links disappear. The next build recreates them.",
+				"Remove", "Keep" );
+			if ( !confirmed )
+			{
+				statusText.Text = "case aliases left in place";
+				return;
+			}
+
+			statusText.Text = "removing case aliases...";
+			var done = await Task.Run( () => CaseAliases.Revert( root, null ) );
+			var detail = done.Describe();
+			statusText.Text = detail;
+
+			if ( done.DirsKept > 0 )
+				detail += $"\n\n{done.DirsKept} directories were left in place because they are no longer empty.";
+			if ( done.Skipped > 0 )
+				detail += $"\n\n{done.Skipped} entries were skipped because they no longer look like an alias Ampersand made.";
+			detail += "\n\nBuild S&Box recreates them automatically.";
+
+			await ConfirmDialog.Notify( this, "Case aliases removed", detail );
+		}
+		catch ( Exception e )
+		{
+			statusText.Text = "case alias removal failed - " + e.Message;
+			await ConfirmDialog.Notify( this, "Case alias removal failed", e.Message );
 		}
 	}
 

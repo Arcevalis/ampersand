@@ -27,6 +27,21 @@ internal static class Program
 	/// </summary>
 	public const string ProbeDistroArgument = "--probe-distro";
 
+	/// <summary>
+	/// Creates (or, with <see cref="RevertCaseAliasesArgument"/>, removes) the
+	/// lowercase image-source links the Linux content build needs. Runs
+	/// automatically before Setup.sh; these modes exist so a checkout can be
+	/// primed or cleaned by hand - see CaseAliases.
+	/// </summary>
+	public const string CaseAliasesArgument = "--case-aliases";
+
+	/// <summary>
+	/// Removes exactly the links <see cref="CaseAliasesArgument"/> created,
+	/// using Ampersand's own journal. The GUI exposes the same operation as the
+	/// sidebar's "Remove case aliases" tool.
+	/// </summary>
+	public const string RevertCaseAliasesArgument = "--revert-case-aliases";
+
 	[STAThread]
 	private static int Main( string[] args )
 	{
@@ -36,6 +51,10 @@ internal static class Program
 			return BootstrapMain( args );
 		if ( args.Length > 0 && args[0] == ProbeDistroArgument )
 			return ProbeDistroMain( args );
+		if ( args.Length > 0 && args[0] == CaseAliasesArgument )
+			return CaseAliasesMain( args, revert: false );
+		if ( args.Length > 0 && args[0] == RevertCaseAliasesArgument )
+			return CaseAliasesMain( args, revert: true );
 
 		return BuildAvaloniaApp().StartWithClassicDesktopLifetime( args );
 	}
@@ -80,6 +99,39 @@ internal static class Program
 		Console.WriteLine();
 		Console.Write( "Press Enter to close." );
 		Console.ReadLine();
+
+		return 0;
+	}
+
+	/// <summary>
+	/// One-shot access to the case-alias pass for a checkout built outside the
+	/// launcher. Deliberately no "Press Enter" hold: this is a scripting mode,
+	/// unlike the report modes that run inside a terminal window.
+	/// </summary>
+	private static int CaseAliasesMain( string[] args, bool revert )
+	{
+		var dryRun = false;
+		for ( var i = 1; i < args.Length; i++ )
+			if ( args[i] == "--dry-run" ) dryRun = true;
+
+		var root = SboxSettings.Resolve() ?? RepoRoot.Find();
+		if ( root is null )
+		{
+			Console.Error.WriteLine( "ampersand: could not locate the repo root - expected game/ and engine/ above this binary" );
+			Console.Error.WriteLine( "hint: set it in the launcher (Replace s&box path) or run from the repo checkout" );
+			return 1;
+		}
+
+		if ( revert )
+		{
+			var result = CaseAliases.Revert( root, Console.WriteLine, dryRun );
+			Console.WriteLine( result.Describe() );
+		}
+		else
+		{
+			var result = CaseAliases.Ensure( root, Console.WriteLine, dryRun );
+			Console.WriteLine( result.Describe() );
+		}
 
 		return 0;
 	}
